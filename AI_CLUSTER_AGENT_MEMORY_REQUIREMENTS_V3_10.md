@@ -997,7 +997,8 @@ Runtime Result / Tool Evidence / User Event
 Candidate Evaluation
        ├─ NONE
        ├─ Episodic Candidate
-       ├─ Semantic Candidate       ├─ Procedural Candidate
+       ├─ Semantic Candidate
+       ├─ Procedural Candidate
        ├─ Preference Candidate
        ├─ Lesson Candidate
        └─ Shared Context Candidate
@@ -1996,7 +1997,8 @@ CODING
 ROOM
 → conclusion / evidence / next action
 
-HANDOFF→ structured HandoffCapsule
+HANDOFF
+→ structured HandoffCapsule
 
 ARCHITECTURE / REPORT
 → explicit larger budget
@@ -2996,6 +2998,7 @@ candidate / active / contested / superseded / retracted / archived / tombstoned
 ```
 
 长期未使用默认导致 retrieval demotion，而不是物理删除。
+
 ## 30.2 Consolidation
 
 多个 Episode/Lesson/Procedure 可以形成更高层 Consolidated Memory：
@@ -3994,7 +3997,8 @@ Namespace bypass
 Agent/MemorySpace identity mismatch
 Canonical memory corruption
 Restart continuity failure
-Deleted/tombstoned memory remains normally retrievableVisible Turn bypasses M0/M1 lifecycle
+Deleted/tombstoned memory remains normally retrievable
+Visible Turn bypasses M0/M1 lifecycle
 Critical Truth lossy-compressed
 Compression validation failure silently accepted
 ```
@@ -4994,6 +4998,7 @@ hot/warm payload
 Remote encrypted:
 cold/archive payload
 ```
+
 命中冷数据时再 hydrate ciphertext、解密并验证。
 
 ## 41.7 Storage Privacy ≠ Model Egress
@@ -5993,6 +5998,7 @@ Token/Latency/RAM/Disk 成本可接受
 ```
 
 才允许进入实施评审。
+
 如果 SQLite/FTS/Relation baseline 已达到质量目标，则可以永久不部署 Embedding/Vector。
 
 ## 45.11 No Embedding Model Is Selected
@@ -6991,7 +6997,8 @@ M1 Recall 默认输出 bounded `MemoryCapsule`，完整记录仅通过 `memory.r
 ### D-MEM-183 — Initial Capture Supports Only High-confidence Signals
 MVP Capture 优先实现 Explicit Remember、Manual Save、Explicit Correction、Verified Outcome/Repair 等强信号。
 
-### D-MEM-184 — Correction Updates Memory Lineage Instead of Adding Silent Contradictions明确用户 Correction 必须查找受影响 Memory，并通过 Revision/Supersede/Conflict 更新当前 Truth。
+### D-MEM-184 — Correction Updates Memory Lineage Instead of Adding Silent Contradictions
+明确用户 Correction 必须查找受影响 Memory，并通过 Revision/Supersede/Conflict 更新当前 Truth。
 
 ### D-MEM-185 — Core Is Deterministic, Small and Rebuildable
 MVP Core 只包含少量高价值条目，并从 Canonical Memory 确定性重建。
@@ -8990,6 +8997,7 @@ v3.10 在 v3.9 `D-MEM-020` 至 `D-MEM-190` 基础上新增：
 D-MEM-191 ~ D-MEM-205
 SQLite Schema / Rust API Engineering Freeze
 ```
+
 当前阶段：
 
 ```text
