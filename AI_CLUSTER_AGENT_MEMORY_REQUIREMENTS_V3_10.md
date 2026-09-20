@@ -7997,6 +7997,7 @@ CREATE TABLE memory_projection_state (
                               'REBUILDING',
                               'FAILED'
                           )),
+
     source_marker         TEXT,
     last_error_code       TEXT,
     last_error_message    TEXT,
