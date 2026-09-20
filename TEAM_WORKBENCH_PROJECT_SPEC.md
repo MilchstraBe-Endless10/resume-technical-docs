@@ -17980,3 +17980,16987 @@ Architect + Product + Reviewer
 ```
 
 而不是 Room 中有几个人就全员回答。
+---
+
+# 200. Speaker / Round / Cost Budget：防止多 Agent 失控
+
+Room Policy 建议包含：
+
+```ts
+interface RoomParticipationBudget {
+  maxAutoRespondersPerTurn: number
+  maxParallelResponders: number
+  maxAgentRounds: number
+  maxAgentMessagesPerUserTurn: number
+  maxCostPerUserTurn?: number
+  maxCostPerRoom?: number
+}
+```
+
+建议默认：
+
+```text
+maxAutoRespondersPerTurn = 1
+maxParallelResponders = 2
+```
+
+只有用户显式 Panel、Scheduler 确认并行价值或 Review Policy 要求时才扩展。
+
+达到预算后：
+
+```text
+PAUSE
+→ 显示“需要继续多 Agent 讨论吗？”
+```
+
+不能自动无限追加回合。
+
+---
+
+# 201. Joined ≠ Listening：Agent 加入 Room 不代表每条消息都调用模型
+
+这是成本和语义上都必须写死的原则。
+
+一个 Agent 加入 Room：
+
+```text
+Agent B
+JOINED
+```
+
+只代表它是 Room Participant。
+
+不代表：
+
+```text
+每来一条消息
+→ B Memory Recall
+→ B Runtime
+→ B 更新自己的记忆
+```
+
+否则 100 个 Agent 的 Room 即使只有一个人在说话，也会产生 100 倍后台成本。
+
+正式引入：
+
+# Room Awareness Cursor
+
+```ts
+interface RoomAwarenessCursor {
+  roomId: string
+  agentId: string
+  lastObservedEventId?: string
+  roomDigestRevision?: number
+  updatedAt: string
+}
+```
+
+当 Agent B 下一次真正获得 Turn 时：
+
+```text
+B 上次看到 event 120
+当前 room 到 event 468
+        ↓
+Context Broker
+        ↓
+Room Digest
++ 120 → 468 中与 B 相关的增量
++ Decision / Task / Handoff / Artifact refs
+        ↓
+B beforeTurnMemory()
+```
+
+不把 348 条消息全部直接塞给模型。
+
+Turn 完成后再推进 B 的 Awareness Cursor。
+
+因此：
+
+> **没有被真正激活的 Agent，不会假装自己已经“听见并理解”所有讨论。**
+
+---
+
+# 202. Room Context 不是 Shared Memory
+
+继续坚持前面已经锁定的 Memory 原则。
+
+Agent B 发言：
+
+```text
+Agent B Definition
++ B Core Memory
++ B Private Memory Recall
++ Current Room Context Package
++ Project / Work State
++ Workspace / Artifact refs
++ Current User Input
+        ↓
+Runtime
+```
+
+禁止：
+
+```text
+A Private Memory
++B Private Memory
++C Private Memory
+→ 混成一个 Room Brain
+```
+
+Room 可以共享：
+
+```text
+Room Transcript
+Project Decision
+Task State
+Handoff
+Artifact
+Public Finding
+Pinned Resource
+```
+
+这些属于 Workbench Shared Context / Project Truth，不属于任何 Agent 的 Private Memory。
+
+一个 Agent 在参与 Room 后，可以在 `afterTurnMemory()` 中形成自己的 Episodic / Lesson；另一个 Agent可以形成不同的经验。
+
+---
+
+# 203. 多用户场景：Agent Memory Studio 的可见性不能跟 Room Membership 绑定
+
+即使两个用户都在同一个 Room：
+
+```text
+User A owns Agent A
+User B owns Agent B
+```
+
+User B 也不能因为加入 Room 就看到：
+
+```text
+Agent A Private Memory
+Core Memory Detail
+Preference Memory
+Lesson Memory
+```
+
+Room 中对非 Owner 默认只展示：
+
+```text
+Agent Public Identity
+Role
+Capabilities
+Current Runtime / Model
+Current Skill / Task
+Availability / Health
+Public Output
+```
+
+完整 Memory Studio 仍属于 Agent Owner 的私有管理界面。
+
+这与“Room 共享协作上下文，但不共享 Agent 大脑”保持一致。
+
+---
+
+# 204. Agent-to-Agent Collaboration：聊天消息和 Handoff 必须分开
+
+Agent A 可以在 Room 中说：
+
+```text
+“这个实现需要 Coding Agent 接手。”
+```
+
+但真正的工作转移不能只靠这句话。
+
+必须生成：
+
+```text
+Handoff Proposal
+        ↓
+Scheduler Validation
+        ↓
+Handoff Object
+        ↓
+Task Assignment
+        ↓
+Agent B RoomTurn / Run
+```
+
+Handoff 继续使用前面已经定义的结构化对象：
+
+```text
+From
+To
+Task
+Reason
+Objective
+Definition of Done
+ResourceRefs
+ContextRefs
+Constraints
+Budget
+Permission / Runtime-native execution requirements
+Expected Outputs
+```
+
+Room 只把它展示成一张可理解的协作卡片。
+
+因此：
+
+> **聊天负责表达，Handoff 负责执行。**
+
+---
+
+# 205. Agent 不能直接无限“叫另一个 Agent”
+
+允许 Agent 提议：
+
+```text
+需要 Reviewer
+需要 Blender Expert
+建议加入 Security Agent
+```
+
+但它只能产生：
+
+```text
+room.participant.request
+handoff.request
+spawn.request
+```
+
+是否真正：
+
+```text
+邀请
+Spawn
+激活
+产生 Model Call
+```
+
+仍由 Scheduler / Room Policy / 用户设置决定。
+
+这与之前的：
+
+> **Spawn is a request, not an entitlement.**
+
+完全一致。
+
+---
+
+# 206. Room 与 Task Graph 的正确关系
+
+复杂 Work Item：
+
+```text
+Room
+ ├─ 人和 Agent 讨论
+ ├─ 可见 Agent 输出
+ └─ 协作状态卡
+          │
+          ▼
+Task Graph
+ ├─ T1 Product Analysis
+ ├─ T2 Architecture
+ ├─ T3 Implementation
+ ├─ T4 Test
+ └─ T5 Review
+```
+
+Room 内出现：
+
+```text
+“我来负责 T3”
+```
+
+不能直接把文本当成 Task ownership。
+
+正确流程：
+
+```text
+Agent / User proposal
+      ↓
+Scheduler
+      ↓
+Task.assigned
+      ↓
+Workbench Event Store
+      ↓
+Room 投影显示
+```
+
+所以 Room UI 可以非常自然，但工作状态仍然可恢复、可审计、可重建。
+
+---
+
+# 207. Panel Mode：多 Agent 独立意见与综合
+
+某些场景确实需要：
+
+```text
+产品 Agent
+架构 Agent
+Reviewer
+```
+
+同时给出意见。
+
+Panel 应采用：
+
+```text
+User Question
+     ↓
+Fan-out
+ ┌───┼───┐
+ ▼   ▼   ▼
+ A   B   C
+     ↓
+Collect
+```
+
+默认先展示独立答案。
+
+如果用户需要“综合意见”，再由一个明确的 Agent：
+
+```text
+Primary Agent
+Facilitator Agent
+或用户指定 Agent
+```
+
+执行 Synthesis Turn。
+
+Workbench Core 自己不偷偷调用第三个隐藏 LLM 做综合。
+
+同时保存：
+
+```text
+PanelTurnReceipt
+参与 Agent
+各自模型
+各自成本
+并行耗时
+综合 Agent（如有）
+```
+
+---
+
+# 208. Room UI：让“谁正在干什么”一眼可见
+
+建议 Room 采用三层信息密度。
+
+顶部：
+
+```text
+Product Launch Room
+4 Agents · 2 Humans
+Auto · Balanced
+Current cost ¥0.82 / ¥5.00
+```
+
+参与者区：
+
+```text
+Product Agent
+READY · Auto → DeepSeek
+
+Architect Agent
+NEEDS CATCH-UP · Auto
+
+Coding Agent
+RUNNING · Codex
+/code-edit
+Task T3
+
+Reviewer
+WAITING · Auto
+```
+
+主区域仍以 Conversation 为主。
+
+只有真实出现多 Agent / Handoff / Parallel Task 时，右侧或展开区才显示 Collaboration Canvas：
+
+```text
+Product ✓
+   ↓
+Architect ✓
+   ↓
+Coding ●
+   ↓
+Reviewer ○
+```
+
+不要因为进入 Room 就永久占一大块 Canvas。
+
+---
+
+# 209. Room Participant Status 必须区分“在场”和“正在推理”
+
+建议稳定语义：
+
+```text
+JOINED
+已加入 Room，但不代表正在调用模型
+
+READY
+当前可被选择
+
+NEEDS_CATCH_UP
+Awareness Cursor 落后，需要在下一次 Turn 前补上下文
+
+QUEUED
+已产生 RoomTurnRequest
+
+RUNNING
+当前 Agent Turn / Task 正在执行
+
+WAITING
+等待 Task / Handoff / Approval / Dependency
+
+BLOCKED
+无法继续
+
+OFFLINE
+Runtime / Agent 不可用
+```
+
+不要用模糊的：
+
+```text
+LISTENING
+```
+
+如果实际上没有持续模型调用，否则会误导用户以为 Agent 在实时理解所有消息。
+
+---
+
+# 210. Composer 在 Room 内继续复用现有语义
+
+Room Composer 不需要重新发明一套输入方式。
+
+继续：
+
+```text
+@ = Person / Agent / Expert
+/ = Skill
++ = File / Workspace / Resource
+```
+
+例如：
+
+```text
+@Architect
+/repo-analysis
+
+请重点检查 Runtime Router 的边界。
+```
+
+这里：
+
+```text
+@Architect
+→ 明确 RoomTurn target
+
+/repo-analysis
+→ 显式 Skill Intent
+```
+
+如果没有 `@`：
+
+```text
+当前 Room Policy = AUTO
+→ Participation Router 选择一个 Agent
+```
+
+如果用户输入：
+
+```text
+@Architect @Reviewer
+```
+
+可以显示：
+
+```text
+2 Agents selected
+Estimated extra cost ...
+```
+
+让多 Agent fan-out 是显式的，而不是隐藏发生。
+
+---
+
+# 211. 每个 Agent 的模型 / Skill / Runtime 状态都能在 Room 中看到，但不强迫展开技术细节
+
+Participant Card 只显示最关键状态：
+
+```text
+Architect
+Auto → DeepSeek Model X
+/repo-analysis
+READY
+```
+
+用户点击后才展开：
+
+```text
+Model Policy
+Current selected model
+Runtime
+Active Skills
+Plugin dependencies
+Current Task
+Recent cost
+Memory health
+```
+
+如果是 Agent Owner，还可以继续：
+
+```text
+Open Memory Studio
+Open Skill Studio
+Open Plugin Studio
+Open Glass Box
+```
+
+这样 Room 会成为多个 Agent 的实时观察入口，但不会一开始就像运维控制台。
+
+---
+
+# 212. Room Digest：为长房间提供稳定共享上下文投影
+
+长时间 Room 可能积累：
+
+```text
+10,000 messages
+```
+
+不能每个 Agent 激活时重放全部历史。
+
+建议维护：
+
+```text
+RoomStateProjection
++ RoomDigest revision
++ Decision refs
++ Task refs
++ Artifact refs
++ Handoff refs
+```
+
+`RoomDigest` 是 Context Optimization Artifact，不是 Agent Memory，也不是最终事实真源。
+
+任何摘要都必须保留：
+
+```text
+sourceEventRange
+sourceRefs
+revision
+```
+
+当 Agent Catch-up 时使用：
+
+```text
+stable digest
++ relevant event delta
+```
+
+而不是全量 transcript。
+
+---
+
+# 213. Room 性能：人数增长不能线性放大模型调用
+
+必须满足：
+
+```text
+100 Room Participants
+≠ 100 Model Calls per message
+```
+
+实现原则：
+
+```text
+Room Event Log append-only
+RoomProjection 增量更新
+Mention Index
+Participant Eligibility Index
+Awareness Cursor
+Unread / Attention Index
+Task / Handoff Projection
+Cursor Pagination
+Virtualized Message List
+```
+
+UI 打开 Room 时读取投影，不回放全部历史计算当前状态。
+
+Agent Catch-up 只处理：
+
+```text
+last awareness cursor → current event
+```
+
+并通过 Context Broker 做 rank / dedup / token budget。
+
+---
+
+# 214. Room Recovery：重启后不能靠 Harness Session 重建群聊
+
+Room 真源继续是：
+
+```text
+Workbench Conversation / Event Store
++ Task Graph
++ Handoff
++ Agent Registry
++ Room Membership
+```
+
+DeepSeek Session / Codex Thread 仍然只是 Runtime Binding。
+
+Workbench 重启后：
+
+```text
+恢复 Room Membership
+恢复 Awareness Cursor
+恢复 Task / Handoff 状态
+恢复 Queued RoomTurnRequest
+probe Runtime Binding
+```
+
+再决定哪些 Runtime 可以 resume，哪些需要创建新 Binding。
+
+---
+
+# 215. Decision Log — v0.28 Agent Room / Agent Team / Multi-Agent Collaboration
+
+## D-241 — Agent Team、Agent Room、Task Graph 永久分层
+
+**决定：** Team 是可复用 Agent 编组，Room 是沟通/协作表面，Task Graph 是工作状态真源；三者不得互相替代。  
+**状态：** Accepted
+
+## D-242 — Room 默认不全员响应
+
+**决定：** 未显式 Panel 时，单条用户消息默认最多自动选择 1 个 Agent；`@Agent` 是精确点名覆盖。  
+**状态：** Accepted
+
+## D-243 — Room Participation Router 不是 Agent Loop
+
+**决定：** Participation Router 只做候选过滤、发言资格、排队、预算与并发控制；真正推理仍由 Agent Runtime 执行。  
+**状态：** Accepted
+
+## D-244 — Agent Message 不自动触发另一个 Agent Turn
+
+**决定：** Agent 输出只能提出 Handoff / Invite / Spawn / Reply Proposal；不得默认形成无限 Agent-to-Agent 自动对话链。  
+**状态：** Accepted
+
+## D-245 — Joined 不等于持续调用模型
+
+**决定：** Agent 加入 Room 只建立 Membership；未获得 Turn 时不执行 Memory Recall / Runtime Call，不产生持续 token 成本。  
+**状态：** Accepted
+
+## D-246 — 每个 Room Agent 使用独立 Awareness Cursor
+
+**决定：** Agent 下次被激活时通过 Room Digest + Relevant Delta Catch-up；不要求从加入 Room 起处理每一条消息。  
+**状态：** Accepted
+
+## D-247 — Room Context 不是 Shared Memory
+
+**决定：** Room Transcript / Decision / Task / Artifact / Handoff 属于 Shared Context / Project Truth；任何 Agent Private Memory 不因 Room Membership 被合并或跨读。  
+**状态：** Accepted
+
+## D-248 — Room Membership 不授予他人 Agent Memory Studio 访问权
+
+**决定：** 多用户 Room 中，Agent 私有 Memory 仍按 Agent Owner 隔离；其他参与者默认只能看到公开身份、能力与执行状态。  
+**状态：** Accepted
+
+## D-249 — 聊天表达与 Handoff 执行分离
+
+**决定：** Agent 可以在聊天中表达“请某 Agent 接手”，但真正工作转移必须创建结构化 Handoff / Task Assignment。  
+**状态：** Accepted
+
+## D-250 — 多 Agent 自动协作必须受 Speaker / Round / Cost Budget 控制
+
+**决定：** Room Policy 必须限制自动发言者数量、并行度、回合数与成本；达到阈值暂停并请求用户继续。  
+**状态：** Accepted
+
+## D-251 — Panel 是显式协作模式
+
+**决定：** 多 Agent 独立回答只在用户显式 Panel、Workflow fan-out 或 Scheduler 确认必要时发生；综合必须由明确 Agent 执行，不由 Workbench Core 隐藏调用模型。  
+**状态：** Accepted
+
+## D-252 — Room UI 展示真实当前模型 / Skill / Task 状态
+
+**决定：** Participant Card 可以展示 Agent 当前实际选择的 Runtime/Model、活动 Skill、Task 与状态；详情进入 Agent Studio / Glass Box，不在主聊天面板过载展示。  
+**状态：** Accepted
+
+## D-253 — 长 Room 使用 Digest + Delta，而不是全历史回放
+
+**决定：** Room Context 维护可追溯 Digest / Projection 与 Awareness Cursor；Agent Catch-up 采用 bounded context package。  
+**状态：** Accepted
+
+## D-254 — Room 重启恢复基于 Workbench Truth
+
+**决定：** Room Membership、Turn Request、Awareness Cursor、Task/Handoff 由 Workbench Event/State Store 恢复；Harness Session / Codex Thread 不作为 Room 真源。  
+**状态：** Accepted
+
+---
+
+# 216. v0.29 核心修正：Room 不只是 Group Chat，而是 Mission 协作表面
+
+用户在 Room 中说：
+
+```text
+@Architect
+把这个项目从方案到实现、测试、Review 全部做完。
+```
+
+不应解释为：
+
+```text
+@Architect 回复一段文字
+其他 Agent 继续闲置
+```
+
+也不应解释为：
+
+```text
+Room 所有 Agent 同时自由聊天
+直到“看起来完成”
+```
+
+正式定义一种 UI / orchestration 模式：
+
+```text
+Mission Mode
+```
+
+`Mission Mode` 不是新的业务真源。它在底层绑定：
+
+```text
+Work Item
++ Task Graph
++ Room
++ Agent Team Assembly
++ Runtime Bindings
+```
+
+Room 仍是沟通和观察表面；Task Graph / Scheduler 仍是执行真源。
+
+---
+
+# 217. @ 一个 Agent = 可把它提升为本次 Mission Lead
+
+用户可以显式指定：
+
+```text
+@Architect as Lead
+```
+
+也可以通过自然语言隐式触发：
+
+```text
+@Architect 你带着大家把这个项目做完。
+```
+
+系统产生：
+
+```text
+MissionLeadBinding
+
+workItemId
+roomId
+leadAgentId
+scope
+createdBy
+status
+```
+
+Lead 只是**本次 Work / Mission 的协调角色**，不是 Agent 的永久上下级关系。
+
+Lead Agent 的职责：
+
+```text
+理解目标
+→ 明确 Definition of Done
+→ 做 Capability Gap Analysis
+→ 提出 Team Composition
+→ 提出 Task Graph
+→ 提出 Runtime / Backend 建议（可选）
+→ 提出 Review / Repair 路径
+```
+
+Lead 不直接拥有 Scheduler 权力。
+
+依旧遵循：
+
+> Agent proposes. Scheduler authorizes and executes.
+
+在 `Auto Team` 策略允许范围内，Scheduler 可以无人工弹窗自动批准符合限制的 Team Proposal。
+
+---
+
+# 218. Agent Team Assembly：不是随机拉一群 Agent
+
+团队形成必须来自任务能力缺口，而不是“Agent 数量越多越好”。
+
+建议 Team Assembly 流程：
+
+```text
+Mission Objective
+      ↓
+Task / Capability Analysis
+      ↓
+Required Roles / Capabilities
+      ↓
+Agent Registry Candidate Search
+      ↓
+Reuse Existing Room Agent First
+      ↓
+Reuse Existing User Agent
+      ↓
+Approved Agent Definition
+      ↓
+Ephemeral Specialist（最后手段）
+      ↓
+Scheduler Validate
+      ↓
+Join Room / Assign Task
+```
+
+示例：
+
+```text
+目标：实现新的 Runtime Adapter
+
+能力需求：
+Architecture
+Rust Engineering
+Testing
+Independent Review
+
+Room 当前：
+Architect ✓
+Coding Agent ✓
+
+缺口：
+Testing
+Reviewer
+
+Auto Team：
++ Test Agent
++ Reviewer Agent
+```
+
+因此自动组队是：
+
+> **Capability-gap-driven team composition。**
+
+不是让 Lead Agent凭感觉无限 Spawn。
+
+---
+
+# 219. Room Autonomy Policy：支持真正全自动，也保留人工控制
+
+Room / Work 可以设置：
+
+```text
+MANUAL
+人决定邀请、分工、开始执行
+
+ASSISTED
+Agent 提出 Team / Task Proposal，用户确认
+
+AUTO_TEAM
+在预算 / Agent 数 / Definition Trust / Project Policy 范围内自动组队、分工和执行
+```
+
+`AUTO_TEAM` 是用户希望的主要自动化模式。
+
+允许：
+
+```text
+Lead 自动邀请已有 Agent
+Lead 自动请求新的临时 Specialist
+Scheduler 自动接受低风险 Handoff
+Scheduler 自动并行独立 Task
+Review 不通过时自动创建 Repair Task
+```
+
+但仍保留硬边界：
+
+```text
+maxAgents
+maxParallelAgents
+maxCost
+maxWallTime
+maxHandoffs
+maxRepairLoops
+allowedAgentDefinitions
+allowedBackends
+```
+
+用户始终可以：
+
+```text
+Pause Mission
+Stop Branch
+Remove Agent
+Change Lead
+Reassign Task
+Pin Backend
+Switch Auto → Manual
+```
+
+---
+
+# 220. Agent 自己添加 Agent：使用 Join / Spawn Proposal，不直接修改 Room
+
+Agent 可以调用语义动作：
+
+```text
+team.request_member
+team.request_specialist
+room.request_invite
+agent.request_spawn
+```
+
+提案包含：
+
+```text
+reason
+requiredCapability
+suggestedAgentId / definitionId
+expectedTask
+expectedCost
+expectedDuration
+isEphemeral
+```
+
+`AUTO_TEAM` 下 Scheduler 可自动接受。
+
+如果没有已有合适 Agent：
+
+```text
+Approved Agent Definition
+      ↓
+Create Ephemeral Agent Instance
+      ↓
+独立 Ephemeral MemorySpace
+      ↓
+Join Room
+      ↓
+执行任务
+```
+
+Mission 完成后：
+
+```text
+Dispose Ephemeral Agent
+```
+
+或者用户选择：
+
+```text
+Promote to Persistent Agent
+```
+
+不得因为 Agent 自己说“需要专家”，就自动安装任意未知 Agent Package 或永久 Agent。
+
+---
+
+# 221. 每个 Agent 是否应该自己选择 CLI / Harness 底座？——历史设计，v0.35.1 已收紧范围
+
+> **v0.35.1 修正：** 下文把 Claude Code / OpenCode / OpenClaw 等当成“同一 Workbench Agent 可直接切换的 Runtime”过于宽泛。当前正式边界见第 384 节：持久 Workbench Agent 的核心对话 Runtime 只允许 DeepSeek Harness / Codex Harness；外部 CLI/Harness 只进入 Room/Mission 的 Execution Worker 域。以下内容保留用于说明当时的设计演进，不再作为 Direct Agent Domain 的现行规范。
+
+
+
+正式将三个概念继续彻底分开：
+
+```text
+Agent Identity
+= 谁在工作 / 谁拥有 Memory
+
+Execution Backend / Harness= 用哪套 Agent Loop / CLI / Runtime 执行
+
+Model
+= 本次推理由哪个模型完成
+```
+
+因此同一个 Agent 可以：
+
+```text
+Architect Agent
+agent_id = architect_07
+memory = mem_architect_07
+
+Task A
+→ DeepSeek Harness
+→ reasoning model
+
+Task B
+→ Claude Code
+→ Claude model
+
+Task C
+→ Codex
+→ OpenAI model
+```
+
+只要：
+
+```text
+agent_id 不变
+memory_namespace 不变
+```
+
+它仍然是同一个 Agent。
+
+**Agent 的长期身份不应该被某一个 CLI 绑死。**
+
+---
+
+# 222. Agent Execution Backend Policy
+
+每个 Agent 增加：
+
+```text
+Execution Backend Policy
+```
+
+建议模式：
+
+```text
+AUTO              # 默认
+PREFERRED         # 优先若干 Backend，必要时可回退
+FIXED              # 固定某一个 Backend
+TASK_OVERRIDE      # 本 Task / Turn 临时固定
+```
+
+例如：
+
+```yaml
+agent: coding-agent
+backendPolicy:
+  mode: auto
+  preferred:
+    - codex
+    - claude-code
+    - opencode
+```
+
+用户可以手动选择；Agent 在 Auto 模式下也可以提出 Backend Proposal。
+
+最终分配继续由 Scheduler / Runtime Router 根据真实 Capability 与健康状态确认。
+
+---
+
+# 223. 不把所有 CLI 当成同等级 Runtime
+
+不同外部 CLI / Harness 的控制能力差异很大，因此 Adapter 必须暴露能力，而不是只暴露一个命令字符串。
+
+建议 `ExecutionBackendCapabilities` 至少包含：
+
+```text
+persistentSession
+resume
+structuredEvents
+streaming
+steer
+interrupt
+followupQueue
+nativePermissions
+workspaceBinding
+nativeSkills
+nativeSubagents
+modelSelection
+imageInput
+mcp
+acp
+backgroundTasks
+diffEvents
+testEvents
+usageTelemetry
+```
+
+Workbench 对外仍只读 Effective Capability。
+
+建议后端分级：
+
+```text
+Tier H — Full Harness
+有完整 Session / Tool / Permission / Event / Resume 能力
+
+Tier A — Structured External Agent / ACP
+有稳定协议、Session 和结构化事件
+
+Tier C — CLI Backend
+stdio / JSONL / headless 调用，可用但控制与可观测性较弱
+```
+
+路由时：
+
+> Full Harness / Structured Runtime 优先于仅文本 CLI fallback。
+
+不能为了“支持 CLI”把完整 telemetry、approval、resume 能力降级掉。
+
+---
+
+# 224. 建议的 Backend 扩展顺序
+
+现有一等 Runtime 继续保持：
+
+```text
+DeepSeek Harness
+Codex Harness / app-server
+```
+
+下一阶段优先研究：
+
+```text
+Claude Code
+OpenCode
+```
+
+原因：二者都是成熟 coding-agent CLI 形态，适合验证多 Backend Adapter。
+
+后续可作为可选 Adapter / Integration Registry 项：
+
+```text
+OpenClaw / ACP
+PraisonAI
+OpenHands Agent SDK / Runtime
+Gemini CLI
+GitHub Copilot CLI
+其他通过 ACP / 稳定 headless protocol 的 Agent CLI
+```
+
+不要求第一版一次接入所有 CLI。
+
+备注：用户提到的 `Promise` 当前尚未确认对应的准确项目仓库；在没有明确 upstream 前不得在 Integration Registry 中假定其实现或许可证。
+
+---
+
+# 225. Open-source Multi-Agent Reference Matrix：借鉴，不把多个框架一起塞进 Core
+
+优先研究以下项目的特定设计，而不是复制整个框架：
+
+```text
+Microsoft Agent Framework
+→ Sequential / Concurrent / Handoff / GroupChat / Magentic
+→ Graph Workflow
+→ Streaming Events
+→ Checkpoint / Resume
+→ Visualization
+
+AutoGen（Pattern Reference）
+→ GroupChat Manager
+→ SelectorGroupChat
+→ Swarm / Handoff
+→ Human-in-the-loop
+注：当前项目已进入 maintenance mode，新依赖不应以它作为主基础。
+
+CrewAI
+→ Crews + Flows
+→ 自治团队与确定性流程分层
+
+MetaGPT
+→ Role-based Team
+→ SOP / 软件团队式分工
+→ “Code = SOP(Team)”思路
+
+LangGraph Supervisor / Swarm
+→ Supervisor / Handoff
+→ 可定制 Handoff Payload
+注意：默认全消息历史共享不适合我们的 Per-Agent Context 隔离原则。
+
+PraisonAI
+→ Multi-Agent / Planning / Handoff
+→ Router
+→ External Agent CLI integration
+→ Visual Flow / Langflow integration
+
+OpenClaw
+→ Provider / Model / Agent Runtime 分层
+→ ACP external harness session
+→ CLI Backend plugin
+→ per-agent runtime policy
+→ external harness lifecycle / session binding
+
+Archify
+→ 最终流程 Snapshot / Export
+```
+
+Workbench 的取舍：
+
+> **借鉴 orchestration primitive 与 protocol，不让外部 framework 成为 Workbench Task Truth。**
+
+---
+
+# 226. 推荐的 Mission 执行链：@ 一个 Lead，让它带队完成整个项目
+
+示例：
+
+```text
+User
+  │
+  │ @Architect
+  │ “带着团队把这个项目完成”
+  ▼
+Architect Agent
+MISSION LEAD
+  │
+  ├─ 明确目标 / DoD
+  ├─ Capability Gap Analysis
+  ├─ Team Proposal
+  └─ Task Graph Proposal
+  │
+  ▼
+Scheduler
+  │
+  ├─ Validate dependency
+  ├─ Validate budget
+  ├─ Resolve agents
+  ├─ Resolve backend/model
+  └─ Build execution plan
+  │
+  ▼
+┌─────────────────────────────────┐
+│        LIVE MISSION GRAPH       │
+│                                 │
+│      Architect ✓                │
+│     DeepSeek Harness            │
+│          │                      │
+│     ┌────┴────┐                 │
+│     ▼         ▼                 │
+│ Product ✓   Coding ●            │
+│ DeepSeek     Codex              │
+│                │                │
+│          ┌─────┴─────┐          │
+│          ▼           ▼          │
+│       Tests ●     Review ○       │
+│       OpenCode    Claude Code    │
+│          └─────┬─────┘          │
+│                ▼                │
+│              Merge ○            │
+└─────────────────────────────────┘
+```
+
+这里的 Runtime / CLI 只是 Agent 节点当前执行底座，不改变 Agent Identity。
+
+---
+
+# 227. 多 Agent Context：不使用“全群聊天记录广播给所有 Agent”
+
+正式采用五层 Context Composition：
+
+```text
+1. Agent Definition / Core Memory
+2. Agent Private Recall
+3. Mission Context Base
+4. Task Delta / Handoff Packet
+5. Relevant Room Digest Delta
+```
+
+## Mission Context Base
+
+慢变化、可缓存：
+
+```text
+Objective
+Definition of Done
+Project constraints
+Key Decisions
+Workspace manifest
+Architecture baseline
+Budget / deadline
+```
+
+## Task Delta
+
+当前 Agent 真正需要的：
+
+```text
+Task objective
+Dependencies
+Relevant files
+Expected output
+Tests
+Current blockers
+```
+
+## Handoff Packet
+
+前序 Agent 交接：
+
+```text
+from
+why
+result refs
+changed refs
+decisions
+known risks
+open questions
+```
+
+## Room Digest Delta
+
+只包含自该 Agent 上次 Awareness Cursor 后，与当前任务相关的 Room 变化。
+
+因此：
+
+```text
+100 Agent Room
+```
+
+也不要求每个 Agent 读取 100 Agent 的全部消息。
+
+---
+
+# 228. Context Receipt：把“这个 Agent 到底看到了什么”也可视化
+
+每一个 Mission Agent Turn 可以生成：
+
+```text
+AgentContextReceipt
+
+agentId
+turnId
+missionBaseRevision
+taskId
+privateMemoryRefs
+handoffRefs
+roomDigestRevision
+roomDeltaRange
+workspaceRefs
+tokensByLayer
+droppedRefs
+backendId
+modelId
+```
+
+用户点 Canvas 节点：
+
+```text
+Coding Agent
+```
+
+可以看到：
+
+```text
+CONTEXT
+
+Mission Base       3.1k
+Private Memory     1.4k
+Task Delta         2.2k
+Handoff            0.9k
+Room Delta         0.6k
+Workspace Refs       8
+
+Dropped
+5 stale
+3 duplicate
+2 token budget
+```
+
+这与 MemoryTurnReceipt、SkillRouterReceipt、ModelSelectionReceipt 一起组成 Agent Glass Box。
+
+---
+
+# 229. Mission Canvas：流程、Agent、Backend、Skill 与文件改动统一可视化
+
+Canvas 节点至少显示：
+
+```text
+Agent Name
+Role
+Task
+State
+Backend
+Model
+Active Skill
+Cost
+```
+
+示例：
+
+```text
+Coding Agent
+● RUNNING
+
+Task
+Runtime Adapter
+
+Backend
+Codex
+
+Model
+Auto → GPT Engineering
+
+Skill
+/code-edit
+
+Workspace
+worktree/run-821
+```
+
+Edge 使用真实语义：
+
+```text
+depends_on
+handoff
+parallel
+review
+repair
+merge
+blocked_by
+```
+
+点击 Edge 可以查看 Handoff / Dependency Receipt。
+
+Canvas 不读取模型自述状态；它只投影 Scheduler + Event Store + Runtime Adapter 事件。
+
+---
+
+# 230. Room UI：Chat Mode 与 Mission Mode 共存
+
+同一个 Room 不需要两个独立产品。
+
+普通讨论：
+
+```text
+Chat Mode
+```
+
+保持轻量消息界面。
+
+当用户触发复杂工作：
+
+```text
+“让大家一起完成”
+“你带队完成”
+“创建项目计划并执行”
+```
+
+系统出现：
+
+```text
+Mission Strip
+```
+
+例如：
+
+```text
+Mission · Runtime Adapter v2
+● 4 Agents · 5/9 Tasks · ¥1.82 / ¥5
+
+[Open Flow]
+[Tasks]
+[Pause]
+```
+
+只有展开后显示完整 Canvas / Team / Task Graph。
+
+保持：
+
+> Chat-first, Mission-workspace-on-demand.
+
+---
+
+# 231. 多 Agent 项目的 Completion / Merge 规则
+
+“所有 Agent 都回答完”不等于项目完成。
+
+Mission 完成必须满足结构化：
+
+```text
+Task Graph terminal state
++ Definition of Done
++ required Review approved
++ required Tests passed
++ required Artifact exists
++ unresolved blocker = 0
+```
+
+最后可以由 Lead Agent 做：
+
+```text
+Mission Summary
+```
+
+但 `SUCCEEDED` 状态由 Scheduler 根据结构化完成条件确认，不由 Lead Agent 自己宣布。
+
+---
+
+# 232. Decision Log — v0.29 Mission-Oriented Agent Room & Pluggable Execution Backends
+
+## D-255 — Room 增加 Mission Mode，但 Work Item / Task Graph 继续是真源
+
+**决定：** Mission Mode 是 Room 上的自动协作体验；底层绑定 Work Item、Task Graph、Team Assembly 与 Runtime Binding，不创造新的工作真源。  
+**状态：** Accepted
+
+## D-256 — @Agent 可以成为本次 Mission Lead
+
+**决定：** 用户可以把任意合适 Agent 指定为当前 Work 的 Lead；Lead 负责目标澄清、Team/Task Proposal 与协调，不拥有 Scheduler 最终执行权。  
+**状态：** Accepted
+
+## D-257 — 自动组队基于 Capability Gap
+
+**决定：** Lead / Team Planner 必须根据任务能力需求与当前 Agent Registry 做团队组成；禁止以“更多 Agent 更好”为理由无约束扩张团队。  
+**状态：** Accepted
+
+## D-258 — Room 支持 AUTO_TEAM
+
+**决定：** 用户可启用全自动团队策略，在人数、预算、可信 Definition、并发、时长等边界内，Agent 可自动请求邀请/Spawn，Scheduler 自动批准并执行。  
+**状态：** Accepted
+
+## D-259 — 自动新建优先 Ephemeral Agent
+
+**决定：** 能力缺口没有现成 Agent 时，优先从管理员/用户批准的 Definition 创建独立 Ephemeral Agent + Ephemeral MemorySpace；任务结束销毁或由用户显式 Promote。  
+**状态：** Accepted
+
+## D-260 — Agent Identity 与 Execution Backend 永久分离
+
+**决定：** Agent 不绑定某一 CLI/Harness；Agent Identity / MemorySpace 保持稳定，Runtime/CLI 可以按 Task 切换。  
+**状态：** Superseded by D-385 / D-389（Agent 核心 Runtime 仅 DeepSeek/Codex；外部 CLI 仅 Room Worker）
+
+## D-261 — 每个 Agent 拥有 Execution Backend Policy
+
+**决定：** 支持 Auto / Preferred / Fixed / Task Override；用户可手动选择，Auto 时 Agent/Router 可提出建议，Scheduler 依据 Effective Capability 选择。  
+**状态：** Superseded by D-385 / D-388（Direct Agent 改为 CoreHarnessPolicy；External Backend Policy 仅属于 Room Worker）
+
+## D-262 — Backend 路由使用 Capability，不使用品牌硬编码
+
+**决定：** Claude Code、Codex、OpenCode、DeepSeek Harness、OpenClaw/ACP 等通过统一 Adapter Capability Contract 参与路由；UI 不写品牌 if/else。  
+**状态：** Superseded in scope by D-389（Capability 路由仍成立，但外部 CLI 只参与 Room Worker 路由）
+
+## D-263 — Full Harness 与简单 CLI Backend 分级
+
+**决定：** 不把仅支持 stdout 的 CLI 与具有 Session/Steer/Permission/Event/Resume 的完整 Harness 当成等价执行底座；Router 在任务需要时优先结构化 Runtime。  
+**状态：** Accepted
+
+## D-264 — DeepSeek Harness + Codex 继续作为首批内建 Runtime
+
+**决定：** 多 Backend 架构不是推翻现有双 Harness；第一阶段仍以 DeepSeek + Codex 为内建一等路径，再增加 Claude Code / OpenCode 等 Adapter。  
+**状态：** Accepted
+
+## D-265 — OpenClaw / ACP 作为 External Harness Interop 重点参考
+
+**决定：** 重点研究 OpenClaw 的 Provider/Model/Runtime 分层、ACP session 与 CLI backend plugin 设计；是否直接依赖其实现必须经过 Integration Registry 与 contract test。  
+**状态：** Accepted
+
+## D-266 — 多 Agent Orchestration 借鉴 MAF / MetaGPT / CrewAI / LangGraph / PraisonAI，不让其成为 Workbench Truth
+
+**决定：** 可直接借鉴/适配成熟开源 primitive，但 Workbench Event Store、Scheduler、Task Graph、Agent Memory 仍是产品真源。  
+**状态：** Accepted
+
+## D-267 — AutoGen 只作为 Pattern Reference
+
+**决定：** AutoGen 的 GroupChat / Selector / Swarm / Handoff 很有参考价值，但其当前进入 maintenance mode，因此不作为新系统的核心长期依赖。  
+**状态：** Accepted
+
+## D-268 — Mission Context 使用 Base + Delta + Handoff + Private Memory
+
+**决定：** 多 Agent 项目禁止默认广播完整 Room Transcript；每个 Agent 只获得 Mission Base、Task Delta、结构化 Handoff、Relevant Room Delta 与自己的 Private Memory。  
+**状态：** Accepted
+
+## D-269 — 每个 Agent Turn 生成 Context Receipt
+
+**决定：** Mission 模式必须可解释“该 Agent 本轮看到了什么”，ContextReceipt 与 Memory/Skill/Model/Runtime receipts 一起进入 Glass Box。  
+**状态：** Accepted
+
+## D-270 — Mission Canvas 显示 Agent 当前真实 Backend / Model / Skill / Task
+
+**决定：** Flow / Canvas 的节点和 Edge 只投影 Scheduler/Event/Adapter truth，实时显示分工、并行、Handoff、Review、Repair 与每个 Agent 当前执行底座。  
+**状态：** Accepted
+
+## D-271 — Mission 完成由结构化 DoD 判定
+
+**决定：** “Agent 说完成了”不是完成条件；必须依据 Task Graph、Definition of Done、Review/Test/Artifact 与 blocker 状态确定最终 Success。  
+**状态：** Accepted
+
+---
+
+# 233. v0.29 Open-source Research References
+
+当前重点参考：
+
+```text
+Microsoft Agent Framework
+https://github.com/microsoft/agent-framework
+
+AutoGen
+https://github.com/microsoft/autogen
+
+CrewAI
+https://github.com/crewAIInc/crewAI
+
+MetaGPT
+https://github.com/FoundationAgents/MetaGPT
+
+LangGraph Supervisor / Swarm
+https://github.com/langchain-ai/langgraph-supervisor-py
+https://github.com/langchain-ai/langgraph-swarm-py
+
+PraisonAI
+https://github.com/MervinPraison/PraisonAI
+
+OpenClaw
+https://github.com/openclaw/openclaw
+
+OpenCode
+https://github.com/anomalyco/opencode
+
+OpenHands
+https://github.com/OpenHands/OpenHands
+
+Codex
+https://github.com/openai/codex
+```
+
+每个项目进入实现依赖前仍必须经过：
+
+```text
+Integration Registry
+License Review
+Version Pin
+Contract Test
+Upgrade Strategy
+```
+
+
+---
+
+# 234. Mission Planner：AUTO TEAM 不能只是“自动拉人”
+
+AUTO TEAM 的核心目标不是让更多 Agent 同时出现，而是：
+
+```text
+用户给出目标
+    ↓
+明确任务边界与完成条件
+    ↓
+形成可执行计划
+    ↓
+识别真正需要的能力
+    ↓
+选择最少但足够的 Agent
+    ↓
+生成依赖清晰的 Task Graph
+    ↓
+按关键路径执行 / 并行 / Review / Repair
+    ↓
+持续根据真实结果局部重规划
+    ↓
+以结构化证据判断是否完成
+```
+
+因此：
+
+> **Mission Planner 是“计划协议 + 确定性编译/验证 + Agent 提案”的组合，不是再增加第三个 Agent Loop。**
+
+真正理解复杂目标、提出工作方法的仍然是 Mission Lead Agent；Workbench 不重新实现一个隐藏“大脑”。
+
+---
+
+# 235. Mission 生命周期
+
+建议正式状态机：
+
+```text
+DRAFT
+  ↓
+INTAKE
+  ↓
+PLANNING
+  ↓
+PLAN_READY
+  ↓
+EXECUTING
+  ├── WAITING_INPUT
+  ├── BLOCKED
+  ├── REPLANNING
+  └── VERIFYING
+          ↓
+   SUCCEEDED / FAILED / CANCELLED
+```
+
+其中 `REPLANNING` 不代表从零开始，而是产生新的 `MissionPlanRevision`，保留已经完成的 Task / Artifact / Decision / Review 证据。
+
+---
+
+# 236. Mission Charter：先明确“到底要完成什么”
+
+用户一句：
+
+```text
+@Architect
+带队把 Runtime v2 做完。
+```
+
+Mission Lead 首先应该形成结构化 `MissionCharter`：
+
+```ts
+interface MissionCharter {
+  missionId: string
+  goal: string
+  deliverables: DeliverableSpec[]
+  definitionOfDone: CompletionRule[]
+  constraints: MissionConstraint[]
+  workspaceRefs: string[]
+  sourceRefs: string[]
+  budgetPolicy: BudgetPolicyRef
+  autonomyMode: 'MANUAL' | 'ASSISTED' | 'AUTO_TEAM'
+  deadline?: string
+  riskClass?: string
+  assumptions: Assumption[]
+}
+```
+
+如果信息不足但不阻塞，可以记录 `assumptions` 后继续；只有会显著改变成本、权限、交付物或不可逆操作时才要求用户补充。
+
+Mission Charter 是后续 Team Assembly、Task Graph、Review 和最终完成判定的共同基准。
+
+---
+
+# 237. Lead Agent 是 Plan Owner，不是产品状态真源
+
+用户显式：
+
+```text
+@Architect 带队完成这个项目
+```
+
+则 Architect 是本 Mission 的 `Lead Agent / Plan Owner`。
+
+如果用户没有指定 Lead，Workbench 可以先通过 Lead Candidate Router 选择最合适的 Agent，依据：
+
+```text
+任务领域匹配
+规划 / 分解能力
+相关 Project / Work 经验
+已有 Context affinity
+当前可用性
+历史 Mission 结果
+成本 / 延迟
+```
+
+Lead 可以：
+
+```text
+提出 Mission Charter
+提出 Team Composition
+提出 Task Graph
+提出 Handoff
+提出 Replan
+提出新增 Agent
+提出 Review / Repair
+```
+
+但不能直接把：
+
+```text
+“我认为做完了”
+```
+
+写成 Mission Success。
+
+Scheduler / Completion Gate 仍依据结构化状态和证据推进。
+
+---
+
+# 238. Role Slot：任务角色不是 Agent Identity
+
+不能把系统写死成：
+
+```text
+Product Agent
+Architect Agent
+Coder Agent
+Reviewer Agent
+```
+
+因为不同领域完全不同。
+
+Mission Planner 使用临时 `RoleSlot / CapabilitySlot`：
+
+```text
+Role Slot: Backend Implementation
+requires:
+- rust
+- repository-write
+- test-execution
+
+Role Slot: Independent Review
+requires:
+- code-review
+- repository-read
+- independent-review
+```
+
+然后才从 Agent Registry 中匹配实际 Agent。
+
+因此：
+
+```text
+Role Slot
+!= Agent Definition
+!= Agent Instance
+```
+
+一个 Agent 可以连续承担多个相近 Slot；一个 Slot 也可以在 Replan 时重新分配给另一个 Agent。
+
+---
+
+# 239. Capability Demand：先问“缺什么能力”，再问“拉谁进群”
+
+Lead 生成初步 Plan 时同步输出：
+
+```text
+Capability Demand
+
+architecture        required
+rust coding          required
+testing              required
+security review      optional
+video                 not required
+```
+
+Team Assembly Planner 再对当前 Room / Team 做差分：
+
+```text
+已有：
+Architect ✓
+Coding ✓
+
+缺少：
+Independent Review
+Testing
+```
+
+只有真正存在 Capability Gap 才考虑增加 Agent。
+
+原则：
+
+> **最小充分团队（Minimum Sufficient Team），而不是最大化 Agent 数量。**
+
+---
+
+# 240. Team Assembly Planner
+
+Team Assembly 推荐四阶段：
+
+```text
+Capability Demand
+      ↓
+Candidate Discovery
+      ↓
+Hard Compatibility Filter
+      ↓
+Suitability Score
+      ↓
+Assignment Optimizer
+```
+
+候选来源优先级：
+
+```text
+1. 当前 Room 已有 Agent
+2. 当前用户已有 Persistent Agent
+3. 当前 Agent Team / Project 推荐 Agent
+4. 已批准 Agent Definition
+5. 创建 Ephemeral Agent
+```
+
+避免因为“有个更高分的新 Agent”就不断替换已有成员，因为新 Agent 会产生 Context 装载、Memory 冷启动、Runtime Session 和协调成本。
+
+---
+
+# 241. Agent Suitability 不只看 Skill Match
+
+候选 Agent 的评分特征至少预留：
+
+```text
+Capability Fit
+Domain Fit
+Relevant Private Memory Affinity
+Skill / Plugin Availability
+Execution Backend / Model Compatibility
+Workspace / Repo Affinity
+Historical Task Success
+Review Quality
+Current Load
+Runtime Health
+Warm Session / Cache Affinity
+Expected Cost
+Expected Latency
+Collaboration Reliability
+User / Project Preference
+```
+
+但首版不锁死固定权重。
+
+建议通过 `TeamAssemblyPolicy` 配置权重，并通过 Usage Ledger / Mission 历史逐步校准。
+
+全局目标不是“每个 Task 选择局部最高分 Agent”，而是近似：
+
+```text
+minimize
+Mission Critical Path
++ Expected Cost
++ Context Churn
++ Coordination Overhead
++ Failure Risk
+```
+
+subject to：
+
+```text
+Capability
+Budget
+Concurrency
+Runtime Availability
+Workspace Isolation
+Review Independence
+User Policy
+```
+
+---
+
+# 242. 首版分配算法不需要追求复杂全局最优
+
+第一版推荐：
+
+```text
+Hard Filter
+→ Weighted Greedy Assignment
+→ Critical-path Priority
+→ Local Improvement / Swap
+```
+
+而不是一开始就引入复杂搜索优化器。
+
+原因：
+
+- Mission 会动态变化；
+- Agent / Runtime Health 会变化；
+- Task 会在执行后才暴露真实依赖；
+- 完美求解旧计划价值有限；
+- 增量重规划比一次全局最优更重要。
+
+未来如果 Team / Task 数量扩大，再考虑 min-cost matching、constraint solver 或其他优化器。
+
+---
+
+# 243. Task Graph 由 Agent 提案，Plan Compiler 编译
+
+Lead Agent 可以输出结构化 Plan Proposal：
+
+```text
+T1 Architecture Contract
+T2 Backend Implementation
+T3 Unit Tests
+T4 Integration Tests
+T5 Independent Review
+T6 Repair if needed
+T7 Final Verification
+```
+
+Plan Compiler 负责验证：
+
+```text
+DAG 是否有环
+Task 是否有 DoD
+依赖是否完整
+Capability Requirements 是否可满足
+Agent / Runtime 是否可用
+Budget 是否可接受
+Workspace write 是否冲突
+Review Policy 是否满足
+并行分支是否真的独立
+```
+
+Agent 不需要自己处理拓扑排序、Slot Lock、Budget Reservation 等机械细节。
+---
+
+# 244. Rolling-Wave Planning：不要一次规划到项目最后一行代码
+
+复杂 Mission 如果一开始生成 100 个极细 Task，后面的计划大概率会失效。
+
+因此采用：
+
+```text
+Near Horizon
+→ 详细 Task
+
+Mid Horizon
+→ Milestone / coarse Task
+
+Far Horizon
+→ Deliverable / Goal only
+```
+
+例如：
+
+```text
+现在：
+T1 架构契约
+T2 Runtime Router
+T3 Tests
+
+后面：
+M2 Integration
+M3 Release Verification
+```
+
+完成 T1/T2 后再把 M2 展开。
+
+这既减少 Planning Token，也减少大量无效 Task 变更。
+
+---
+
+# 245. MissionPlanRevision：计划必须可追溯，不静默改写
+
+```text
+Plan v1
+  ↓
+执行
+  ↓
+T3 发现接口假设错误
+  ↓
+Replan
+  ↓
+Plan v2
+```
+
+v2 不得偷偷重写 v1。
+
+应保存：
+
+```text
+revision
+reason
+changedTasks
+supersededTasks
+newTasks
+agentReassignments
+budgetDelta
+sourceRefs
+```
+
+已完成且仍有效的 Task 保持原结果；错误前提影响到的未来 Task 标记 `SUPERSEDED`，再建立新 Task lineage。
+
+---
+
+# 246. Replan Trigger：什么时候允许团队“重新组织”
+
+建议至少包括：
+
+```text
+用户目标改变
+新的明确约束
+Task BLOCKED
+Repair Loop 超限
+能力缺口暴露
+Runtime / Backend 不可用
+模型能力不满足
+Workspace 冲突
+预算预测越界
+关键 Artifact / Test / Review 不通过
+长时间无进展 / Stall
+```
+
+局部错误优先 Repair；只有影响计划结构时才 Replan。
+
+因此：
+
+```text
+Test Failed
+→ Repair Task
+```
+
+不应该每次都：
+
+```text
+整个项目重新规划
+```
+
+---
+
+# 247. Progress Ledger 可以借鉴，但 Workbench Truth 仍是结构化状态
+
+Microsoft Agent Framework 的 Magentic orchestration 使用 manager Agent 动态协调专门 Agent，并根据任务进展和能力决定下一位参与者；其示例还公开 Plan / Progress Ledger、HITL Plan Review 与 checkpoint/resume。这个模式非常适合参考 Mission Lead 的“规划 → 观察进展 → 调整”交互。  
+
+Workbench 采用其思路，但不让 LLM 自己维护的文本 Ledger 成为产品真源。
+
+正式结构：
+
+```text
+Event Store + Task Graph + Scheduler
+          ↓
+Mission Progress Projection
+          ↓
+Lead Agent Progress Context
+          ↓
+Lead 可提出 Replan
+```
+
+这样“完成了多少、谁正在运行、Task 是否通过 Review”仍然来自真实事件。
+
+---
+
+# 248. Context：Lead 看全局摘要，Worker 只看自己的 Task Contract
+
+Lead Agent 需要：
+
+```text
+Mission Charter
+Plan Graph Summary
+Progress Projection
+Blockers
+Budget / Risk Summary
+Team State
+Key Decisions
+```
+
+Worker Agent 默认只需要：
+
+```text
+自己的 Core + Private Memory
+Mission Brief
+Task Contract
+DoD
+Handoff Packet
+必要 Decision
+Workspace Refs
+Relevant Room Delta
+```
+
+Reviewer 默认需要：
+
+```text
+Task Contract
+Definition of Done
+Artifact / ChangeSet
+Test Evidence
+Relevant Decision
+Review Policy
+```
+
+不需要获得另一个 Agent 的 Private Memory，也不需要完整 Room Transcript。
+
+---
+
+# 249. Task Contract：每次分工必须像“正式派单”，不是一句聊天
+
+```ts
+interface TaskContract {
+  taskId: string
+  objective: string
+  definitionOfDone: CompletionRule[]
+  capabilityRequirements: string[]
+  inputRefs: string[]
+  workspaceRefs: string[]
+  constraints: string[]
+  expectedOutputs: string[]
+  reviewPolicy?: ReviewPolicy
+  budgetEnvelope?: BudgetEnvelope
+  sourceRefs: string[]
+}
+```
+
+Room 中的自然语言：
+
+```text
+“Coding Agent，你实现一下。”
+```
+
+只能作为人类可读消息；真正执行必须落成 Task Contract。
+
+---
+
+# 250. Reviewer Independence
+
+Review 不应该机械地等于“再调用一次同一个 Agent”。
+
+风险较低：
+
+```text
+Self-check
+```
+
+可以作为普通验证步骤。
+
+风险较高：
+
+```text
+Independent Review
+```
+
+要求：
+
+```text
+不同 Agent Instance
+```
+
+并可进一步配置：
+
+```text
+prefer different Backend
+prefer different Model family
+```
+
+但不强制所有项目都双模型双 Harness Review，避免无意义成本。
+
+---
+
+# 251. Backend / Model 不应在 Team Planning 阶段过早锁死
+
+Team Planner 首先分配：
+
+```text
+Task → Agent
+```
+
+真正执行前再由该 Agent 的：
+
+```text
+Execution Backend Policy
+Model Policy
+Skill Router
+Runtime Health
+Current Task Requirements
+```
+
+决定：
+
+```text
+Agent + Backend + Model + Skill
+```
+
+只有 Task 明确要求某个 Backend Capability 时，Plan 才提前约束。
+
+这样 Replan 不需要因为模型切换就重建整个团队。
+
+---
+
+# 252. Mission Canvas：同一真源的三种视图
+
+建议一个 Mission 可以切换：
+
+```text
+FLOW VIEW
+看依赖 / 关键路径
+
+TEAM VIEW
+看每个 Agent 正在干什么
+
+TIMELINE VIEW
+看什么时候发生了什么
+```
+
+例如 Team View：
+
+```text
+Architect      T1 Architecture      ✓
+Coding Agent   T2 Implementation    ● Codex
+Test Agent     T3 Unit Tests        ● OpenCode
+Reviewer       T5 Review            ○ Waiting
+```
+
+Flow View：
+
+```text
+Architecture ✓
+      │
+      ▼
+Implementation ● ───► Unit Tests ●
+      │                   │
+      └─────────┬─────────┘
+                ▼
+              Review ○
+```
+
+所有视图都来自相同 Task / Event / Runtime truth，不各自维护状态。
+
+---
+
+# 253. Mission Plan Review / Human Takeover
+
+三种自动化模式与 UI 一致：
+
+```text
+MANUAL
+用户组队、分配、批准 Plan
+
+ASSISTED
+Lead 自动生成 Plan / Team Proposal
+用户确认后执行
+
+AUTO_TEAM
+在预算、人数、Agent Definition、并发等策略范围内自动执行
+```
+
+执行过程中用户随时可以：
+
+```text
+Pause Mission
+Freeze Team
+Add Agent
+Remove Agent
+Reassign Task
+Force Agent
+Force Backend / Model
+Edit Future Plan
+Cancel Branch
+Resume Auto
+```
+
+人工干预写入 Event Store，并成为新的 Plan Revision / Assignment 事实。
+
+---
+
+# 254. TeamAssemblyReceipt：为什么它拉了这个 Agent？
+
+AUTO TEAM 必须可解释。
+
+```text
+Need:
+Independent code review
+
+Selected:
+Reviewer Agent 07
+
+Why:
+code-review capability      strong
+Rust domain                 strong
+recent success              96%
+currently idle              yes
+independent from coder      yes
+cost                        balanced
+
+Rejected:
+Coding Agent
+reason: same agent as implementation
+```
+
+这些信息由 `TeamAssemblyReceipt` 保存，而不是事后再问 Lead Agent 编理由。
+
+---
+
+# 255. Mission Planner 自身也必须限制成本
+
+规划不能变成：
+
+```text
+为一次 ¥0.20 的任务
+先花 ¥2.00 讨论怎么规划
+```
+
+建议：
+
+```text
+Simple Task
+→ 不创建 Mission
+
+Medium Mission
+→ Lead 单次 Plan
+
+Complex / High-risk Mission
+→ Plan + optional Plan Review
+```
+
+只有真正复杂、开放式、高风险任务才允许多轮 Planning / Council。
+
+首版绝不在每一个 Mission 上运行昂贵 workflow search。
+
+---
+
+# 256. Playbook：成功流程可以沉淀，但不能写死所有项目
+
+可以建立：
+
+```text
+Mission Playbook
+```
+
+例如：
+
+```text
+Software Feature
+Bug Fix
+Repository Refactor
+3D Asset Production
+Video Production
+Research Report
+```
+
+Playbook 包含：
+
+```text
+常见 Milestone
+常见 Capability Demand
+推荐 Review Gate
+常见 DoD
+可选 Task Template
+```
+
+Lead 以 Playbook 为起点进行适配，而不是每次从零规划。
+
+MetaGPT 的多角色 + SOP 思想非常适合借鉴到这里：它用明确角色和标准流程将一行需求展开为软件团队协作产物。我们借鉴“SOP 降低自由聊天混乱”的思想，但不能把 Workbench 永久固定成软件公司的几个角色。
+
+---
+
+# 257. AFlow 更适合未来“优化 Playbook”，不适合在线每次现搜流程
+
+AFlow 的核心是自动生成和优化 Agentic Workflow，并使用基于 Monte Carlo Tree Search 的搜索在 workflow space 中寻找更优结构。
+
+这个思想未来非常适合：
+
+```text
+历史 Mission 数据
+      ↓
+离线评估
+      ↓
+Playbook Candidate
+      ↓
+Benchmark / Simulation
+      ↓
+更优 Workflow Template
+```
+
+但第一版不应在用户每次发起 Mission 时实时运行 MCTS 搜索，否则延迟、成本和可预测性都不好控制。
+
+---
+
+# 258. Open-source Orchestration Reference Mapping
+
+当前建议借鉴关系：
+
+```text
+Microsoft Agent Framework
+→ Sequential / Concurrent / Handoff / GroupChat / Magentic
+→ checkpoint / resume / HITL plan review / workflow event streaming
+
+CrewAI
+→ hierarchical manager delegation + result validation
+
+MetaGPT
+→ Role + SOP + structured artifact collaboration
+
+AFlow
+→ future offline workflow / playbook optimization
+
+Workbench
+→ Event Store / Scheduler / Task Graph / Agent Memory / Workspace truth
+```
+
+Microsoft Agent Framework 当前的 workflow samples 明确覆盖 sequential / parallel、human-in-the-loop、checkpoint/resume、handoff，以及 Magentic 计划与进度事件；CrewAI hierarchical process 则采用 manager agent 分配任务并验证结果；MetaGPT 明确把多 Agent 表述为 Agents + Environment + SOP + Communication + Economy，并以软件公司 SOP 为核心。这些都可作为 pattern reference，但不取代 Workbench 产品真源。
+
+---
+
+# 259. 首个 AUTO TEAM 验证场景
+
+第一阶段不要直接验证 30 Agent。
+
+建议：
+
+```text
+User
+  ↓
+@Architect Lead
+  ↓
+Mission: 修改一个真实 Git Repo Feature
+```
+
+允许 Team Assembly 最多：
+
+```text
+Architect
+Coding Agent
+Test Agent
+Reviewer
+```
+
+必须验证：
+
+```text
+Lead 能形成 Charter + Plan
+只在有能力缺口时新增 Agent
+Task Graph 无环
+Coding / Test 可安全并行时才并行
+每个 Agent 只得到自己的 Context Package
+Task 可以使用不同 Backend / Model
+失败只 Repair 或局部 Replan
+Reviewer 独立
+Git ChangeSet / Test / Review 真实可见
+用户可 Pause / Reassign / Add Agent
+Mission 重启后可恢复
+最终 Success 来自 DoD 证据
+```
+
+只要这条链跑通，未来从 4 个 Agent 扩展到更多 Agent 才有意义。
+
+---
+
+# 260. v0.30 Decision Log — Mission Planner / Team Assembly Planner
+
+## D-272 — Mission Lead 是 Plan Owner，不是状态真源
+
+**决定：** 用户指定或自动选择的 Lead Agent 负责理解目标和提出 Plan/Team/Replan；最终 Task/Mission 状态仍由 Workbench Scheduler + Event Store + Completion Gate 决定。  
+**状态：** Accepted
+
+## D-273 — Mission 必须先形成 Mission Charter
+
+**决定：** Goal、Deliverable、DoD、Constraint、Workspace、Budget/Autonomy 等形成结构化 Charter；可记录非阻塞 Assumption，避免无必要追问。  
+**状态：** Accepted
+
+## D-274 — Team Assembly 基于 Capability Gap
+
+**决定：** Lead/Planner 先提出能力需求，再匹配 Agent；禁止以“更多 Agent 更强”为默认策略。  
+**状态：** Accepted
+
+## D-275 — Minimum Sufficient Team
+
+**决定：** 优先复用已有 Agent，一个 Agent 可承担多个相近职责；只有能力缺口、必要并行或 Review 独立性带来明确收益时才增加 Agent。  
+**状态：** Accepted
+
+## D-276 — Mission Role 使用临时 RoleSlot
+
+**决定：** Mission Role/责任与 Agent Identity 解耦；不把 Product/Architect/Coder 等固定角色写死到核心数据模型。  
+**状态：** Accepted
+
+## D-277 — Team Assembly 使用确定性 Filter + Score + Assignment
+
+**决定：** Lead 可提出候选，但 Workbench Team Assembly 负责兼容性过滤、评分、负载/成本/关键路径等确定性分配；首版采用增量 weighted greedy + local improvement。  
+**状态：** Accepted
+
+## D-278 — Task Plan 由 Agent 提案，Plan Compiler 校验
+
+**决定：** Agent 不负责机械调度真源；Plan Compiler 验证 DAG、DoD、Capability、Budget、Workspace 冲突、Review 与并行合法性。  
+**状态：** Accepted
+
+## D-279 — Rolling-Wave Planning
+
+**决定：** 近端任务详细规划，中远期保留 Milestone / Deliverable；禁止复杂 Mission 一开始生成大量易失效细任务。  
+**状态：** Accepted
+
+## D-280 — Replan 创建 MissionPlanRevision
+
+**决定：** 重规划只修改受影响的未来子图，保留历史和已经完成的有效任务；使用 SUPERSEDED / lineage，不静默重写旧计划。  
+**状态：** Accepted
+
+## D-281 — Repair 与 Replan 分离
+
+**决定：** 局部语义失败优先 Repair Task；只有假设、依赖、团队能力、预算或目标发生结构变化时才进入 Replan。  
+**状态：** Accepted
+
+## D-282 — Lead 使用 Mission Progress Projection
+
+**决定：** 可借鉴 Magentic 的计划/进度 ledger 思想，但 Workbench Progress 来自 Event Store / Task Graph 投影，模型文本 ledger 不作为真源。  
+**状态：** Accepted
+
+## D-283 — Worker 获取 Task Contract，不广播 Room 历史
+
+**决定：** Worker Context = Agent Private Memory + Mission Brief + Task Contract + Handoff + Relevant Delta + Workspace refs；禁止默认广播完整 Room transcript。  
+**状态：** Accepted
+
+## D-284 — Reviewer Independence 按风险策略
+
+**决定：** 高风险工作允许要求不同 Agent Instance，并可 prefer 不同 Backend/Model；普通任务不强制昂贵双重 Review。  
+**状态：** Accepted
+
+## D-285 — Backend / Model 延迟绑定
+
+**决定：** Team Planner 默认只做 Task→Agent 分配；Execution Backend / Model / Skill 在执行前按 Agent Policy + Task Requirement 路由，除非任务明确需要特定后端能力。  
+**状态：** Superseded in part by D-388 / D-389（Agent 核心 Harness 只在 DeepSeek/Codex 间延迟绑定；外部 Backend 属于 Room Worker）
+
+## D-286 — Mission 提供 Flow / Team / Timeline 三投影视图
+
+**决定：** 三种视图全部来自统一 Workbench Event/Task/Runtime truth，不维护独立流程状态。  
+**状态：** Accepted
+
+## D-287 — AUTO_TEAM 支持随时 Human Takeover
+
+**决定：** 用户可 Pause、Freeze Team、Add/Remove Agent、Reassign Task、Force Backend/Model、编辑未来计划并恢复 Auto；人工更改形成可审计 Plan Revision。  
+**状态：** Accepted
+
+## D-288 — Team Assembly 必须可解释
+
+**决定：** 每次自动邀请/创建/分配 Agent 生成 TeamAssemblyReceipt，显示需求、候选、过滤、评分和最终选择依据。  
+**状态：** Accepted
+
+## D-289 — Mission Planner 成本必须与任务复杂度匹配
+
+**决定：** 简单任务不升级 Mission；中等 Mission 单次规划；复杂高风险任务才允许多轮 Planning/Plan Review，禁止 Planning overhead 大于任务价值。  
+**状态：** Accepted
+
+## D-290 — Mission Playbook 可复用，但不作为死流程
+
+**决定：** 软件开发、研究、视频、3D 等可以建立 Playbook；Lead 将 Playbook 作为 seed 再适配当前任务。  
+**状态：** Accepted
+
+## D-291 — AFlow 类 Workflow Search 仅作为后期离线优化方向
+
+**决定：** 可基于历史 Mission / Benchmark 离线优化 Playbook；首版不在每次实时 Mission 中运行高成本 MCTS workflow search。  
+**状态：** Accepted
+
+
+# 261. Project / Mission Control Center：项目打开后第一眼应该回答什么
+
+在 v0.30 之后，Workbench 已经拥有 Agent、Room、Mission、Task Graph、Workspace、Git Review、Memory、Skill、Plugin、Model、Execution Backend、Usage / Cost 等大量能力。下一步的核心问题不再是“还能增加什么”，而是：
+
+> **用户进入一个 Project 后，如何在极短时间内知道项目是否正常、谁在工作、哪里卡住、AI 改了什么、自己需要处理什么。**
+
+因此 Project 默认入口不应继续堆功能入口，也不应默认打开一个复杂流程图，而应成为 **Project Control Center**。
+
+它不是新的 Source of Truth，而是现有结构化真源的一组高价值投影：
+
+```text
+Event Store
+Task Graph / Scheduler
+Mission State
+Room Projection
+Workspace / Git State
+Runtime Events
+Transfer Jobs
+Usage Ledger
+Decision / Artifact Store
+        │
+        ▼
+Project Projection Layer
+        │
+        ▼
+Project Control Center
+```
+
+核心原则：
+
+> **Truth lives below; Control Center explains what matters now.**
+
+
+# 262. Project Control Center 与其它页面的边界
+
+必须避免 Project 首页重新吞掉整个产品。
+
+```text
+Agent Home
+= 我与自己的 Personal Agent 如何继续工作
+
+Project Control Center
+= 这个 Project 整体现在发生了什么
+
+Mission / Room
+= 一次具体协作或任务如何推进
+
+Workspace
+= 文件、Repo、媒体、3D、传输与 AI 文件改动
+
+Agent Studio
+= 某一个 Agent 的 Memory / Skills / Plugins / Usage / Glass Box
+```
+
+因此 Project Control Center 可以链接到 Workspace、Room、Mission、Agent，但不复制这些页面的完整能力。
+
+例如 Project 首页只显示：
+
+```text
+AI Changed Files    12
+Unreviewed            3
+High Findings         1
+```
+
+用户点击后才进入 Workspace 的 `AI Changed` Filter，而不是在 Project 首页直接嵌入完整 Explorer。
+
+同样，Project 首页只显示 Mission 的关键状态；复杂 Flow / Team / Timeline 在进入 Mission Focus 后再展开。
+
+
+# 263. “3 秒理解”原则
+
+项目首页的第一屏必须优先回答四个问题：
+
+```text
+1. Is the project healthy?
+2. What is running now?
+3. What needs me?
+4. What changed since I last looked?
+```
+
+推荐首屏结构：
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Team Workbench                           Project Healthy ●   │
+│ Runtime v2 · 3 active missions · Balanced · ¥8.42 / ¥30    │
+├─────────────────────────────────────────────────────────────┤
+│ NEEDS YOU                                                   │
+│ 1 approval · 1 merge conflict · 1 failed transfer          │
+├─────────────────────────────────────────────────────────────┤
+│ RUNNING NOW                                                 │
+│ Runtime v2        Coding ●   Test ●   Review waiting        │
+│ Agent Page PRD    Architect ●                              │
+├───────────────────────────────┬─────────────────────────────┤
+│ WORK / MILESTONES             │ AI WORKSPACE IMPACT         │
+│ Runtime v2   M2 Integration   │ 12 changed · 3 unreviewed   │
+│ Agent Page   M1 UX Contract   │ 1 high review finding       │
+├───────────────────────────────┼─────────────────────────────┤
+│ RECENT DECISIONS              │ RECENT ACTIVITY             │
+│ D-291 AFlow offline only      │ Test passed · 2m            │
+│ D-290 Playbook not hardcoded  │ Codex edited router.rs      │
+└───────────────────────────────┴─────────────────────────────┘
+```
+
+这只是信息架构示意，不要求固定卡片布局。真实 UI 应根据 Project 状态自适应。
+
+
+# 264. Project Health 不能由 LLM 主观总结
+
+Project 顶部可以有一个简明状态，但不能每次打开 Project 就问一个模型：
+
+> “你觉得这个项目健康吗？”
+
+应该由确定性 Projection 产生：
+
+```text
+HEALTHY
+ATTENTION
+BLOCKED
+PAUSED
+DEGRADED
+COMPLETED
+```
+
+典型规则：
+
+```text
+BLOCKED
+= critical-path Task blocked
+  OR required approval unresolved beyond policy
+  OR required Runtime/Workspace unavailable
+
+ATTENTION
+= non-critical failure
+  OR review finding awaiting handling
+  OR transfer/review/sync issue needing user action
+
+DEGRADED
+= project can continue, but a provider/runtime/workspace path is degraded
+
+HEALTHY
+= no unresolved high-priority attention items and active work can proceed
+```
+
+Project Health 是摘要，不替代具体原因。用户点击状态必须能看到导致状态的真实 AttentionItem。
+
+
+# 265. Attention Inbox：Project 首页最重要的数据结构之一
+
+不同模块以后都会产生“需要用户处理”的事件：
+
+```text
+DeepSeek native approval request
+Codex native approval request
+Mission blocker
+Review CHANGES_REQUESTED
+Git merge conflict
+Workspace rollback conflict
+Model unavailable
+Plugin quarantined
+Memory degraded
+Transfer failed
+Safety Point coverage reduced
+Budget soft threshold
+Room waiting for human decision
+```
+
+如果每个模块自己弹自己的 UI，用户会被打断。
+
+因此新增统一的 **Attention Projection / Attention Inbox**。注意：它不是新的权限引擎，也不改变 DeepSeek/Codex 原生 approval；它只把各模块真实事件投影成一个可处理队列。
+
+建议对象：
+
+```ts
+interface AttentionItem {
+  id: string
+  projectId: string
+  sourceType: string
+  sourceRef: string
+
+  severity: 'info' | 'attention' | 'blocking' | 'critical'
+  status: 'open' | 'snoozed' | 'resolved' | 'expired'
+
+  title: string
+  summary: string
+
+  agentId?: string
+  missionId?: string
+  taskId?: string
+  workspaceId?: string
+
+  actions: AttentionActionRef[]
+  createdAt: string
+  updatedAt: string
+}
+```
+
+点击“Approve”时仍由 Runtime Adapter 回到 Harness 原生 approval；Project Control Center 不自己决定权限。
+
+
+# 266. Active Mission Summary：不要用一个误导性的百分比
+
+Rolling-Wave Planning 意味着 Mission 的未来 Task 可能尚未完全展开。因此不能默认显示：
+
+```text
+Project Progress 63%
+```
+
+这种数字容易制造虚假精确性。
+
+默认更适合：
+
+```text
+Runtime v2
+
+Phase
+M2 Integration
+
+Completed
+Architecture ✓
+Implementation ✓
+
+Running
+Tests ●
+
+Waiting
+Independent Review ○
+
+Critical Path
+Tests → Review → Verify
+
+Task State
+8 succeeded · 2 running · 1 waiting
+```
+
+只有当 Mission / Playbook 明确定义了可稳定计算的 milestone weights 时，才允许显示进度百分比，并标注其计算依据。
+
+
+# 267. Running Now：展示真实“谁正在做什么”
+
+`Running Now` 不能只显示“3 Agents active”。用户需要能理解当前执行面：
+
+```text
+Coding Agent
+Task     Implement Router
+Backend  Codex
+Model    Auto → Model X
+Skill    /code-edit
+State    RUNNING
+
+Test Agent
+Task     Prepare integration tests
+Backend  OpenCode
+State    RUNNING
+
+Reviewer
+State    WAITING_FOR T3
+```
+
+但第一屏只显示精简信息；点击 Agent 或 Task 后再进入 Glass Box / Mission View。
+
+如果 Agent 的 Backend/Model 是 Auto 路由结果，应显示当前实际选择，而不是只显示 `Auto`。
+
+
+# 268. Workspace Impact：Project 首页必须直接反映 AI 对真实文件世界的影响
+
+Project Control Center 需要一个轻量 `Workspace Impact` 投影：
+
+```text
+AI Changed             12
+Human Changed           4
+Unreviewed AI Files     3
+Pending Merge           1
+High Review Findings    1
+Transfers               2 running
+Rollback Coverage       Full
+```
+
+点击：
+
+```text
+AI Changed
+```
+
+直接跳到 Workspace：
+
+```text
+filter = AI_CHANGED
+project = current project
+```
+
+点击 High Review Finding 则进入对应 Git Review / ChangeSet。
+
+这让 Project 首页能回答：
+
+> **“AI 最近实际上动了哪些真实资产？”**
+
+而不用用户翻聊天记录。
+
+
+# 269. Decision / Artifact / Deliverable 不应埋在聊天中
+
+Project Control Center 需要显示最近的重要结构化产物：
+
+```text
+Recent Decisions
+Recent Deliverables
+Review Results
+Milestone Artifacts
+```
+
+例如：
+
+```text
+D-291
+AFlow 只作为后期离线 Playbook 优化方向
+
+Artifact
+Runtime Router Design v3
+
+Deliverable
+Integration Test Report
+```
+
+它们全部来自 Decision Store / Artifact Store / Task resultRefs，不从 Room transcript 临时总结后当真源。
+
+聊天中产生候选 Decision 可以先进入 Decision Candidate，再确认成为正式 Project Decision。
+
+
+# 270. Cost / Usage：必须区分 Actual、Reserved、Budget
+
+AUTO TEAM、Hybrid、多 Backend、多 Model 后，Project 顶部必须能轻量看到成本是否受控。
+
+禁止只显示一个模糊：
+
+```text
+Cost ¥8.42
+```
+
+至少应区分：
+
+```text
+Actual
+¥8.42
+
+Reserved
+¥2.10
+
+Project Budget
+¥30.00
+```
+
+以及必要时显示：
+
+```text
+Today
+This Mission
+This Project
+```
+
+点击进入详细 Usage：
+
+```text
+by Agent
+by Mission
+by Backend
+by Model
+by Skill
+by Plugin
+```
+
+Project 首页不需要默认展示复杂成本图表。
+
+# 271. “Next” 应来自 Work State，不由模型每次临时编
+
+首页可以展示：
+
+```text
+NEXT
+
+Runtime v2
+Independent Review
+waiting for Tests
+
+Agent Page PRD
+Finalize Composer contract
+ready
+```
+
+这里的 Next Action 必须来自：
+
+```text
+Task Graph
+Milestone State
+Mission Plan Revision
+Dependency State
+```
+
+不是每次打开页面让 LLM 重新回答：
+
+> “你觉得下一步做什么？”
+
+Lead Agent 可以在 Replan 时提出下一步，但一旦计划被 Scheduler 接受，首页显示结构化真源。
+
+
+# 272. Project Control Center 采用状态驱动的 Adaptive Layout
+
+Project 首页不应该永远显示 12 张 Dashboard 卡。
+
+建议优先级：
+
+```text
+P0  Blocking / Critical Attention
+P1  Active Mission / Run
+P2  Pending Human Action
+P3  Workspace AI Impact / Review
+P4  Current Milestone / Next Work
+P5  Recent Decision / Artifact
+P6  Usage / Cost
+P7  Recent Activity
+```
+
+例如空闲 Project：
+
+```text
+Project
+No active mission
+
+Continue Work
+Recent Decisions
+Workspace
+New Mission
+```
+
+复杂执行中：
+
+```text
+BLOCKER
+Active Mission
+Running Agents
+Critical Path
+Workspace Changes
+```
+
+完成 Project：
+
+```text
+Completed
+Deliverables
+Final Review
+Cost Summary
+Archive / Continue
+```
+
+所以这是一个 Projection-driven Home，而不是固定 Dashboard 模板。
+
+
+# 273. Mission Focus Mode：复杂任务才展开实时控制界面
+
+用户点击正在运行的 Mission 后进入 `Mission Focus Mode`：
+
+```text
+Mission Header
+├ Goal / Charter
+├ Health
+├ Budget
+├ Lead
+└ Pause / Takeover / Resume
+
+Main Surface
+├ Flow View
+├ Team View
+└ Timeline View
+
+Side / Inspector
+├ Attention
+├ Current Task
+├ Workspace Impact
+├ Review
+└ Context / Glass Box
+```
+
+默认视图可以根据当前情况自适应：
+
+```text
+复杂 DAG / handoff
+→ Flow
+
+很多 Agent 并行
+→ Team
+
+故障 / 回溯
+→ Timeline
+```
+
+但用户可以 Pin 自己喜欢的视图。
+
+Mission Focus 仍然只是 Task Graph / Event Store 的投影，不形成第二套 Mission State。
+
+
+# 274. Project Activity Feed：只展示有意义的语义事件
+
+不应该把所有底层 Event 原样倒进 Project 首页：
+
+```text
+tool.started
+tool.stdout.chunk
+tool.stdout.chunk
+token.delta
+...
+```
+
+而应投影成：
+
+```text
+Codex completed Runtime Router implementation
+Tests passed 42/42
+Reviewer requested changes on router.rs
+Repair Task created
+Transfer resumed at 32.4 GB
+Decision D-292 accepted
+```
+
+底层 evidence 仍然保留在 Event Store / Glass Box。
+
+Project Activity 是**语义摘要投影**，不是日志真源。
+
+
+# 275. Project Control Projection：首页不能打开时扫描整个项目历史
+
+建议维护持久增量对象：
+
+```ts
+interface ProjectControlProjection {
+  projectId: string
+  revision: number
+
+  health: ProjectHealth
+  attentionCounts: Record<string, number>
+
+  activeMissionRefs: string[]
+  activeWorkRefs: string[]
+  runningAgentRefs: string[]
+
+  workspaceImpact: WorkspaceImpactSummary
+  budget: ProjectBudgetSummary
+
+  nextActionRefs: string[]
+  recentDecisionRefs: string[]
+  recentArtifactRefs: string[]
+  recentActivityRefs: string[]
+
+  updatedAt: string
+}
+```
+
+更新原则：
+
+```text
+Event arrives
+   ↓
+Update affected projection only
+   ↓
+UI receives delta
+```
+
+禁止：
+
+```text
+打开 Project
+   ↓
+scan all conversations
+scan all tasks
+scan all events
+scan workspace
+scan usage
+   ↓
+重新算首页
+```
+
+
+# 276. Attention Projection 也必须增量维护
+
+为了让“需要我处理”在数千事件下仍然即时，维护：
+
+```text
+ProjectAttentionIndex
+MissionAttentionIndex
+UserAttentionIndex
+```
+
+一个事件只更新对应 sourceRef 的 AttentionItem。
+
+例如：
+
+```text
+review.changes_requested
+↓
+create/update attention:A77
+
+review.approved
+↓
+resolve attention:A77
+```
+
+原生 Harness Approval 同理由 Adapter 产生 Projection Event，再映射为 AttentionItem。
+
+
+# 277. 冷启动与实时性能预算
+
+Project Control Center 是高频页面，应采用非常激进的读取预算。
+
+首版工程目标建议：
+
+```text
+Local cached Project shell          < 50 ms UI feedback
+Control Projection local read P95   < 30 ms
+Event → affected summary P95        < 100 ms
+Event → visible UI P95              < 150 ms
+Mission view first meaningful frame < 200 ms local state
+```
+
+这些是工程预算，不是对所有机器/远程 Provider 的产品承诺。
+
+远程 Workspace / Server 数据采用 stale-while-revalidate：
+
+```text
+show cached projection
+        ↓
+background refresh
+        ↓
+patch changed fields
+```
+
+不能因为服务器离线导致整个 Project 首页空白。
+
+
+# 278. Project Control Center 的数据不能靠模型生成 UI
+
+整个页面的布局选择、Attention 优先级、Mission 状态、Agent 状态、Workspace change count、Usage 等核心信息来自确定性数据。
+
+模型可以做的事情：
+
+```text
+用户点击“给我解释当前 Blocker”
+→ Agent 读取结构化状态后解释
+
+用户点击“帮我重新规划”
+→ Lead 提出 Replan
+```
+
+模型不应该每隔几秒：
+
+```text
+读全部状态
+→ 生成新的 dashboard JSON
+```
+
+这样既昂贵、又不稳定、还难缓存。
+
+
+# 279. Global Home 与 Project Control Center 分层
+
+未来工作台还需要一个跨 Project 的 Global Home，但不应把两个页面混在一起。
+
+```text
+Global Home
+
+Needs You across projects
+Active Projects
+Active Missions
+Recent Work
+Global Runtime / Sync issues
+```
+
+点击某个 Project：
+
+```text
+Project Control Center
+```
+
+然后才进入该 Project 的 Mission / Work / Workspace 细节。
+
+这样用户管理 1 个 Project 和 50 个 Project 都不会失去层级。
+
+
+# 280. Android Companion 可以直接复用 Control Projection
+
+未来 Android 不需要运行完整 Desktop Workbench 才能有高价值。
+
+ProjectControlProjection 天然可以压缩成移动端：
+
+```text
+Project Health
+Needs You
+Running Mission
+Active Agents
+Latest Changes
+Budget
+```
+
+用户在手机上完成：
+
+```text
+查看进度
+处理普通审批
+Pause Mission
+查看 Review Summary
+查看 Transfer / Runtime 状态
+```
+
+真正复杂编辑、Workspace Explorer、Canvas、3D/视频仍在桌面端。
+
+因此 Project Control Projection 同时是未来 Remote Companion 的重要 API 边界。
+
+
+# 281. Project Control Center 首版不做什么
+
+为了避免首页成为“大而全 Dashboard”，首版明确不做：
+
+```text
+默认全屏 Canvas
+完整 Workspace Explorer
+完整 Memory Graph
+完整 Skill / Plugin Studio
+几十项 BI 图表
+每个 Agent 的完整日志
+复杂甘特图
+模型实时生成的状态摘要
+```
+
+这些能力通过 Drill-down 进入对应页面。
+
+Project 首页只承担：
+
+> **状态、注意力、当前执行、变化、下一步和导航。**
+
+
+# 282. 首版 Project Control Center 验证场景
+
+建议直接使用 v0.30 的 4-Agent Git Feature Mission 作为端到端 UI 验证：
+
+```text
+Architect
+Coding
+Test
+Reviewer
+```
+
+测试过程中至少人为制造：
+
+```text
+1 native Runtime approval
+1 test failure + Repair
+1 Git review CHANGES_REQUESTED
+1 AI changed file set
+1 Transfer pause/resume
+1 Agent backend switch
+1 Mission replan
+1 user Pause / Takeover / Resume
+```
+
+Project Control Center 必须做到：
+
+```text
+用户打开 Project
+3 秒内能看见当前 blocker
+知道谁在工作
+知道 AI 改了哪些文件
+知道下一步是谁
+知道本 Mission 已花 / 已预留多少成本
+可以一跳进入对应 Task / Room / Workspace / Review
+```
+
+这比单独做一个漂亮首页更能验证架构是否真的贯通。
+
+
+# 283. v0.31 Decision Log — Project / Mission Control Center
+
+## D-292 — Project 默认入口采用 Control Center
+
+**决定：** Project 首页是结构化状态控制中心，而不是默认聊天页、完整 Explorer 或固定 Canvas。  
+**状态：** Accepted
+
+## D-293 — Control Center 不拥有新的状态真源
+
+**决定：** Project UI 从 Event Store、Task Graph、Mission、Workspace、Usage、Decision/Artifact 等现有真源建立增量 Projection；禁止维护独立业务状态。  
+**状态：** Accepted
+
+## D-294 — 首屏遵循“3 秒理解”
+
+**决定：** 首屏优先回答 Project Health、Running Now、Needs You、Recent Change；低价值统计后置。  
+**状态：** Accepted
+
+## D-295 — Project Health 由确定性规则投影
+
+**决定：** HEALTHY / ATTENTION / BLOCKED / PAUSED / DEGRADED / COMPLETED 等状态来自结构化条件；不调用 LLM 主观判断项目健康度。  
+**状态：** Accepted
+
+## D-296 — 引入 Attention Inbox，但不重新实现 Runtime Approval
+
+**决定：** DeepSeek/Codex native approval、Review、Transfer、Mission blocker 等统一投影为 AttentionItem；具体执行仍回到原生 Runtime/Provider。  
+**状态：** Accepted
+
+## D-297 — Rolling-Wave Mission 默认不显示虚假精确进度百分比
+
+**决定：** 默认显示 Milestone / Phase / Task State / Critical Path；只有存在稳定权重模型时才显示百分比。  
+**状态：** Accepted
+
+## D-298 — Project 首页显示 AI Workspace Impact
+
+**决定：** 显示 AI Changed、Unreviewed、Review Findings、Pending Merge、Transfer、Rollback Coverage 等摘要，并链接 Workspace Filter / ChangeSet。  
+**状态：** Accepted
+
+## D-299 — Cost 显示 Actual / Reserved / Budget
+
+**决定：** Project / Mission 层必须区分已发生费用、Scheduler 已预留费用和总预算；详细成本按 Agent/Backend/Model/Skill 等 Drill-down。  
+**状态：** Accepted
+
+## D-300 — Next Action 来自结构化 Work State
+
+**决定：** Project 下一步来自 Task Graph / Milestone / Mission Plan Revision；模型只能通过正式 Replan 修改计划，不能每次打开首页临时编 Next。  
+**状态：** Accepted
+
+## D-301 — Project 首页采用状态驱动 Adaptive Layout
+
+**决定：** Attention / Active Mission / Workspace Impact / Milestone / Decision / Cost 等按当前状态动态排序，不固定展示大量 Dashboard 卡。  
+**状态：** Accepted
+
+## D-302 — 复杂执行进入 Mission Focus Mode
+
+**决定：** Project 首页保持轻量；需要控制复杂 Mission 时再展开 Flow / Team / Timeline 与 Inspector。  
+**状态：** Accepted
+
+## D-303 — Project Activity 只显示语义事件
+
+**决定：** Project Activity 不展示 token/tool stdout 等高频原始事件；原始 evidence 保留在 Event Store / Glass Box。  
+**状态：** Accepted
+
+## D-304 — ProjectControlProjection 持久增量维护
+
+**决定：** 首页读取增量 Projection，不在打开页面时扫描全部历史；事件只更新受影响的投影字段。  
+**状态：** Accepted
+
+## D-305 — Project Control 支持 cached-first / stale-while-revalidate
+
+**决定：** 远程 Provider 离线或高延迟时先显示本地最后有效投影，再后台刷新；不得让 Project 首页因单个远程服务不可用而整体空白。  
+**状态：** Accepted
+
+## D-306 — Global Home 与 Project Control Center 分离
+
+**决定：** Global Home 管跨 Project 注意力和活动；Project Control Center 管单个 Project，不构建巨型全局 Dashboard。  
+**状态：** Accepted
+
+## D-307 — Android Companion 复用 Control Projection
+
+**决定：** 未来移动端优先消费 Project / Mission compact projection，提供状态查看、普通审批、Pause 与 Review Summary，不运行完整 Workspace/Canvas。  
+**状态：** Accepted
+
+## D-308 — Project 首页核心职责保持克制
+
+**决定：** 首页只承担状态、注意力、当前执行、变化、下一步和导航；完整 Memory/Skill/Plugin/Workspace/BI 继续由各自专业页面负责。  
+**状态：** Accepted
+
+
+# 284. Project Shared Context 不是 Shared Memory
+
+本轮首先锁定一个边界：
+
+```text
+Agent Memory
+= 某一个 Agent 自己长期形成的经验、偏好、经历和方法
+
+Project Shared Context
+= 项目成员与 Agent 共同依赖的项目事实、决定、契约、资料和交付物
+```
+
+因此禁止重新引入：
+
+```text
+Project Shared Memory
+Room Shared Memory
+Organization Shared Memory
+```
+
+来作为多个 Agent 共同的大脑。
+
+正确模型是：
+
+```text
+                     Project Shared Context
+       Requirement / Decision / Contract / Knowledge / Artifact
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+           Agent A          Agent B          Agent C
+         MemorySpace A    MemorySpace B    MemorySpace C
+```
+
+多个 Agent 可以看到相同项目事实，但每个 Agent 对这些事实形成什么长期经验，仍写入自己的 Private MemorySpace。
+
+一句话原则：
+
+> **项目共享事实，不共享大脑。**
+
+
+# 285. Project Truth Object：共享事实必须是结构化产品对象
+
+不能继续依赖：
+
+```text
+“我记得在某个群聊里 Architect 好像说过……”
+```
+
+作为项目真相。
+
+首版至少定义以下共享对象：
+
+```text
+Requirement
+Decision
+Contract
+Knowledge Note
+Runbook / SOP / Playbook
+Reference
+Artifact
+```
+
+它们都属于 Workbench Project Data，不属于任何 Agent Memory Provider。
+
+建议公共字段：
+
+```ts
+interface ProjectTruthObject {
+  id: string
+  projectId: string
+  type: string
+
+  title: string
+  status: string
+  revision: number
+
+  sourceRefs: string[]
+  relatedRefs?: string[]
+
+  authorityClass:
+    | 'canonical'
+    | 'verified'
+    | 'derived'
+    | 'observed'
+    | 'candidate'
+
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+```
+
+`authorityClass` 用来告诉 Context Broker：
+
+```text
+正式 Requirement / Accepted Decision
+```
+
+和：
+
+```text
+Agent 从一次聊天总结出来的 Candidate
+```
+
+绝对不是同一个可信等级。
+
+
+# 286. Project Knowledge Registry
+
+Project Knowledge Registry 是项目共享知识的目录与真源索引，不是“把所有文件复制进数据库”。
+
+例如：
+
+```text
+Project Knowledge
+│
+├── Architecture
+│   ├── Runtime Adapter Boundary
+│   └── Event Store Truth Model
+│
+├── Product
+│   ├── Agent Page Principles
+│   └── Workspace UX Requirements
+│
+├── Engineering
+│   ├── Build / Test Runbook
+│   └── Repository Conventions
+│
+└── References
+    ├── DeepSeek Harness
+    └── Archify
+```
+
+一个 Knowledge Item 可以保存：
+
+```text
+结构化内容 / 摘要 / Assertion
++
+sourceRefs
++
+指向 Workspace 文档的 ResourceRef
+```
+
+但原始：
+
+```text
+PDF
+视频
+repo
+.blend
+大型设计文件
+```
+
+仍在 Workspace Provider 中。
+
+因此：
+
+> **Knowledge Registry 保存“项目知道什么以及证据在哪里”，Workspace 保存真实文件内容。**
+
+
+# 287. Decision Record 必须是一等对象
+
+架构、产品和流程中最危险的问题之一是旧决定和新决定同时存在。
+
+所以正式采用 Decision Record：
+
+```ts
+interface DecisionRecord {
+  decisionId: string
+  projectId: string
+  title: string
+
+  statement: string
+  rationale: string
+  alternatives?: string[]
+  consequences?: string[]
+
+  status:
+    | 'proposed'
+    | 'accepted'
+    | 'superseded'
+    | 'rejected'
+    | 'deprecated'
+
+  supersedes?: string[]
+  supersededBy?: string
+
+  scopeRefs?: string[]
+  sourceRefs: string[]
+  revision: number
+}
+```
+
+例如：
+
+```text
+D-087
+Task Graph 使用 DAG
+ACCEPTED
+```
+
+后续如果新方案替代它：
+
+```text
+D-412
+Task Graph v2 使用 Hierarchical DAG
+ACCEPTED
+
+supersedes:
+D-087
+```
+
+则 D-087 自动变成：
+
+```text
+SUPERSEDED
+```
+
+Agent 默认上下文只拿 active decision，除非任务需要历史原因才读取旧 Decision。
+
+绝对不能把新旧决定一起无标记地塞给模型。
+
+
+# 288. Decision Governance：高自治但不能无痕改项目事实
+
+Agent 可以自动提出：
+
+```text
+decision.candidate
+```
+
+但“提出”与“正式成为 Project Decision”分开。
+
+建议项目可以配置三档 Governance：
+
+```text
+MANUAL
+正式 Decision 由人确认
+
+MISSION_AUTONOMOUS
+Mission 范围内、可逆、低风险决定允许 Lead 自动接受
+
+AUTONOMOUS_WITH_AUDIT
+符合 Project Policy 的决定可自动接受，但必须留 Revision / Receipt
+```
+
+无论哪一档：
+
+```text
+Accepted Decision
+```
+
+都必须有来源、作者、时间、revision 和 supersede lineage。
+
+高影响决定，例如：
+
+```text
+架构真源改变
+删除数据
+发布策略改变
+安全边界改变
+重大接口破坏
+```
+
+默认应提升到 Attention，而不是让某个 Worker 在一条聊天消息里静默改掉项目共识。
+
+
+# 289. Requirement 与 Contract 必须和普通 Knowledge 区分
+
+有些项目信息不是“知识”，而是执行约束。
+
+例如：
+
+```text
+Requirement
+Linux First
+
+Contract
+RuntimeAdapter.startRun() 必须支持 event subscription
+
+Acceptance Criterion
+所有 Agent Turn 必须生成 MemoryTurnReceipt
+```
+
+这些内容应该结构化，而不是只存在 README 或聊天摘要里。
+
+建议：
+
+```text
+Requirement
+├── status
+├── priority
+├── acceptanceCriteria
+├── sourceRefs
+└── affectedWorkRefs
+
+Contract
+├── interface / invariant
+├── version
+├── compatibility
+├── sourceRefs
+└── consumers
+```
+
+Mission Planner / Reviewer / Completion Verifier 可以直接读取这些对象。
+
+于是：
+
+```text
+Definition of Done
+```
+
+不再完全由 Lead Agent 临场发挥。
+
+
+# 290. Artifact Registry：Artifact 是交付物记录，不是另一个文件仓库
+
+Artifact 可能是：
+
+```text
+设计文档
+代码 ChangeSet
+Build
+测试报告
+视频成片
+3D Render
+截图
+架构图
+数据集输出
+Review Report
+```
+
+Workbench 为其建立产品级 Artifact Record：
+
+```ts
+interface ArtifactRecord {
+  artifactId: string
+  projectId: string
+  type: string
+  title: string
+
+  status:
+    | 'draft'
+    | 'review'
+    | 'approved'
+    | 'superseded'
+    | 'archived'
+
+  resourceRefs: string[]
+  producedByRunId?: string
+  producedByTaskId?: string
+  producedByAgentId?: string
+
+  reviewRefs?: string[]
+  sourceRefs?: string[]
+
+  revision: number
+  createdAt: string
+}
+```
+
+真正的文件仍然是：
+
+```text
+ref://workspace/...
+```
+
+或外部 Provider 的稳定 ResourceRef。
+
+所以：
+
+> **Artifact Registry 记录“这是什么交付物、谁产生、哪一版、审核状态如何”；Workspace Provider 保存真实字节。**
+
+
+# 291. Artifact Lineage 必须可追溯
+
+例如：
+
+```text
+Requirement R-21
+      ↓
+Task T-81
+      ↓
+Codex Run R-92
+      ↓
+Workspace ChangeSet C-18
+      ↓
+Test Report A-31
+      ↓
+Review A-32
+      ↓
+Release Artifact A-33
+```
+
+用户点开最终 Artifact，应该能一路追溯：
+
+```text
+它为什么存在？
+对应哪个 Requirement？
+哪个 Agent 做的？
+用了哪个 Task / Run？
+改了哪些 Workspace Resource？
+经过什么 Review？
+是否可以 Revert？
+```
+
+这条 Lineage 来自结构化 Ref，不依赖 Agent 自己生成一篇“工作总结”。
+
+
+# 292. 从聊天 / Run 进入 Project Knowledge 必须经过 Promotion Pipeline
+
+用户和 Agent 在聊天中会产生大量有价值结论，但不能把每一句都自动变成正式 Knowledge。
+
+正式路径：
+
+```text
+Conversation / Room / Run / Review / Workspace
+                    ↓
+            Knowledge Candidate
+                    ↓
+        Source / Evidence Check
+                    ↓
+           Dedup / Conflict
+                    ↓
+         Classification / Scope
+                    ↓
+         Governance / Validation
+                    ↓
+        Publish / Reject / Merge
+                    ↓
+       Project Knowledge Registry
+```
+
+例如 Architect 说：
+
+```text
+“Runtime Session 不能作为产品层 Conversation Truth。”
+```
+
+如果这只是讨论：
+
+```text
+Conversation Event
+```
+
+当 Lead / 用户选择：
+
+```text
+[提升为项目 Decision]
+```
+
+才形成正式 Decision Candidate。
+
+AUTO TEAM 也可以自动提出 Candidate，但不能把“Agent 随口一句话”直接当 canonical truth。
+
+
+# 293. Agent Private Memory 不能被自动发布成项目知识
+
+这是本轮必须继续锁死的隐私边界。
+
+禁止：
+
+```text
+Agent A Private Memory
+      ↓
+自动复制
+      ↓
+Project Knowledge
+```
+
+允许的是：
+
+```text
+Agent A
+在自己的 Memory 中发现一个可迁移 Lesson
+      ↓
+提出新的 Knowledge Candidate
+      ↓
+重新用 Project Source / Run / Artifact 进行 Grounding
+      ↓
+Publish
+```
+
+因此其他 Agent 最终看到的是：
+
+```text
+Project Knowledge K-82
+```
+
+而不是：
+
+```text
+Agent A Memory M-928
+```
+
+这样既允许 Agent 把经验贡献给项目，又不会把私有 MemorySpace 变成隐形共享池。
+
+
+# 294. Project Baseline Context：共享 Context 也需要稳定前缀
+
+为了避免每一个 Agent Turn 都重新搜索大量项目知识，Project 可以维护一个小型、版本化的：
+
+```text
+Project Baseline Context
+```
+
+它包含当前最稳定、最常用的 canonical 信息，例如：
+```text
+Project Brief
+Active Requirements
+Active Architecture Decisions
+Current Contracts
+Important Constraints
+Current Milestone
+```
+
+但它不是人工维护的第二套真源。
+
+正确关系：
+
+```text
+Requirement / Decision / Contract Truth Objects
+                 ↓
+      Baseline Projection Compiler
+                 ↓
+      Project Baseline Context
+```
+
+当 Decision 被 supersede 时，只重建受影响 Baseline revision。
+
+这样可以和我们之前的 Cache-aware Context Layering 配合：
+
+```text
+Stable Prefix
+Agent Definition
+Agent Core Memory
+Project Baseline Context
+Stable Tools / Skills
+
+Dynamic Suffix
+Task Delta
+Retrieved Project Knowledge
+Workspace Excerpts
+Current Turn
+```
+
+
+# 295. Shared Context Broker：Agent 不读取“整个 Project”
+
+当 Agent 执行项目任务时，Context Broker 从不同真源组装：
+
+```text
+Agent Private Memory           # 只属于该 Agent
+Project Baseline Context       # 项目稳定事实投影
+Active Task / Mission State
+Relevant Decisions
+Relevant Requirements / Contracts
+Relevant Knowledge
+Artifact Metadata
+Workspace ResourceRefs
+Room / Conversation Relevant Delta
+```
+
+然后执行：
+
+```text
+Discover
+→ Filter by Project visibility
+→ Retrieve
+→ Rank
+→ Authority Check
+→ Dedup
+→ Staleness Check
+→ Token Budget
+→ Context Package
+```
+
+因此：
+
+> **Full Project Connectivity ≠ Full Project Context。**
+
+一个 Coding Agent 不需要拿到所有市场研究；一个 Product Agent 也不需要默认读取 20 万行源码。
+
+
+# 296. ProjectContextReceipt：共享 Context 同样必须可解释
+
+每个重要 Agent Turn / Task 可以产生：
+
+```ts
+interface ProjectContextReceipt {
+  receiptId: string
+  agentId: string
+  turnId?: string
+  taskId?: string
+
+  baselineRevision?: number
+
+  queriedScopes: string[]
+  candidateCount: number
+  selectedRefs: string[]
+  droppedRefs?: string[]
+
+  droppedByReason?: {
+    stale?: number
+    superseded?: number
+    duplicate?: number
+    tokenBudget?: number
+    visibility?: number
+  }
+
+  latencyMs: number
+}
+```
+
+于是 Glass Box 可以回答：
+
+```text
+这轮为什么知道 D-039？
+为什么没有拿旧的 D-021？
+为什么没看到那个 Artifact？
+是不是因为 stale？
+是不是因为 token budget？
+```
+
+它和：
+
+```text
+MemoryTurnReceipt
+SkillRouterReceipt
+ModelSelectionReceipt
+TeamAssemblyReceipt
+```
+
+共同构成 Agent 可观测体系。
+
+
+# 297. Shared Context 的冲突、过期和超越必须显式处理
+
+Project Knowledge 最危险的不是缺少内容，而是存在两个互相矛盾的“真相”。
+
+所以状态至少支持：
+
+```text
+CANDIDATE
+ACTIVE
+CONTESTED
+STALE
+SUPERSEDED
+REJECTED
+ARCHIVED
+```
+
+例如：
+
+```text
+K-101
+API 使用 /v1/run
+ACTIVE
+```
+
+Workspace 中 API Contract 后来变成：
+
+```text
+/v2/run
+```
+
+如果 K-101 是从旧 Contract 派生的，则 dependency index 检测 source revision 变化：
+
+```text
+K-101
+→ STALE
+```
+
+Context Broker 默认降权或排除，直到重新验证。
+
+这比让 Agent 每次自己猜“哪条资料更新”可靠得多。
+
+
+# 298. Source Dependency Index：只失效真正受影响的知识
+
+不能每改一个 README 就：
+
+```text
+重做整个 Project 的 embedding / summary / knowledge graph
+```
+
+应该维护：
+
+```text
+Source Resource
+      ↓
+Derived Chunks
+      ↓
+Knowledge Items
+      ↓
+Baseline Sections / Context Projections
+```
+
+当：
+
+```text
+resource revision 18 → 19
+```
+
+只标记直接依赖它的派生对象：
+
+```text
+STALE / REINDEX
+```
+
+并异步重建。
+
+这继续遵循整个 Workbench 的增量原则。
+
+
+# 299. Project Knowledge Studio：共享事实也必须可视化
+
+Project Control Center 只显示摘要。
+
+需要深入时进入：
+
+```text
+PROJECT KNOWLEDGE
+
+Overview
+Knowledge
+Decisions
+Requirements
+Contracts
+Artifacts
+Sources
+Graph
+Timeline
+```
+
+首页可以直接看到：
+
+```text
+Active Decisions       42
+Open Requirements      18
+Artifacts in Review     3
+Stale Knowledge          4
+Contested                1
+Candidates               7
+```
+
+这不是 BI，而是项目事实健康度。
+
+
+# 300. Decision Map / Knowledge Graph / Artifact Lineage 都是 Projection
+
+例如 Decision Map：
+
+```text
+D-039 Event Store Truth
+          │
+       supports
+          ▼
+D-087 DAG Task Graph
+          │
+       refined by
+          ▼
+D-272 Mission Planner
+```
+
+Artifact Lineage：
+
+```text
+Requirement
+    ↓
+Task
+    ↓
+Agent Run
+    ↓
+ChangeSet
+    ↓
+Review
+    ↓
+Artifact
+```
+
+Knowledge Graph：
+
+```text
+Runtime Adapter
+   ├── Decision D-039
+   ├── Contract C-08
+   ├── Artifact A-72
+   └── Knowledge K-18
+```
+
+但和 Memory Graph、Flow Canvas 一样：
+
+> **图永远是 Projection，不是真源。**
+
+节点删除、拖动和视觉布局不能偷偷改底层业务事实。
+
+
+# 301. User / Agent 都可以编辑 Project Knowledge，但必须 Revision-first
+
+用户可以：
+
+```text
+Add Knowledge
+Edit
+Promote
+Merge
+Mark Contested
+Supersede
+Archive
+Attach Source
+Convert to Decision
+Convert to Requirement
+```
+
+Agent 也可以提出相同操作的 Candidate。
+
+但是修改正式对象时：
+
+```text
+Revision 7
+      ↓
+Edit
+      ↓
+Revision 8
+```
+
+而不是原地覆盖历史。
+
+对于 Accepted Decision：
+
+```text
+重大语义变化
+```
+
+优先创建：
+
+```text
+new Decision + supersedes
+```
+
+而不是把过去的 Decision 文本改得像从未发生过。
+
+
+# 302. Multi-Agent 协作通过 Ref 共享项目事实，而不是复制 Context
+
+例如 Architect Handoff 给 Coding Agent：
+
+```text
+Handoff
+├── decisionRefs: [D-39, D-87]
+├── requirementRefs: [R-12]
+├── contractRefs: [C-8]
+├── artifactRefs: [A-21]
+└── workspaceRefs: [...]
+```
+
+Coding Agent 收到后由 Context Broker 读取最新 revision。
+
+禁止：
+
+```text
+把 50KB Decision/Requirement 文本复制进每一条 Handoff
+```
+
+这样 Decision 被 supersede 后，后续 Agent 才不会继续拿旧副本。
+
+原则：
+
+> **传稳定 Ref，执行时解析当前有效版本。**
+
+必要时 Handoff 可以 pin revision，明确表示：
+
+```text
+本 Task 必须基于 Contract C-8 rev 12
+```
+
+以保证可复现执行。
+
+
+# 303. Artifact / Decision / Knowledge 进入 Project Control Center 的方式
+
+Project 首页不展示完整知识库，而只显示高价值投影：
+
+```text
+Recent Decisions
+Stale / Contested Knowledge
+Artifacts Waiting Review
+New Approved Deliverables
+Requirement Blockers
+```
+
+例如：
+
+```text
+NEEDS YOU
+
+⚠ D-412 Architecture Decision waiting approval
+⚠ A-72 Release Artifact waiting review
+⚠ K-101 became stale after Contract C-8 changed
+```
+
+用户一跳进入对应对象。
+
+因此 Project Control Center 和 Knowledge Studio 分工清晰：
+
+```text
+Control Center
+= 现在需要关注什么
+
+Knowledge Studio
+= 项目长期共同事实是什么
+```
+
+
+# 304. 搜索与索引：项目知识必须在大规模下仍然快
+
+Project Knowledge 检索采用多层索引：
+
+```text
+Metadata / ID Index
+FTS
+Vector Index
+Entity / Relation Index
+Source Dependency Index
+```
+
+但打开页面和普通搜索不能现场扫描全部 Workspace。
+
+推荐：
+
+```text
+Workspace Change Event
+      ↓
+增量 Parser / Chunker
+      ↓
+只更新受影响 chunk
+      ↓
+FTS / Vector / Entity index delta
+```
+
+大型文件：
+
+```text
+metadata first
+preview / derived text
+chunk on demand
+```
+
+不把 20GB 视频、数 GB 3D 资源直接塞进 Knowledge Index。
+
+与 Workspace 一样，所有 cache 都必须有磁盘上限与淘汰策略。
+
+
+# 305. Shared Context 的权限边界继续保持克制
+
+Project Knowledge 的“谁可以看到 / 编辑”属于 Workbench 项目数据可见性与 Access Role。
+
+Runtime 真正执行文件、命令、网络等权限仍然使用：
+
+```text
+DeepSeek Harness native permissions
+Codex native permissions
+未来 Runtime native permission system
+```
+
+本轮不重新引入 Unified Harness Permission Engine。
+
+Context Broker 只把当前用户 / Agent 在该 Project 中有权读取的 ProjectTruthObject 解析进 Context Package。
+
+
+# 306. 首版端到端验证场景
+
+建议继续使用 4-Agent Runtime Feature Mission：
+
+```text
+Architect
+Coding
+Test
+Reviewer
+```
+
+验证：
+
+```text
+1. 用户在 Room 中提出一项 Requirement
+2. Architect 提出 Decision Candidate
+3. Project Policy 使其进入 Accepted / Waiting Approval
+4. Coding Handoff 只传 Decision/Contract Ref
+5. Coding Agent 执行并产生 ChangeSet Artifact
+6. Test Agent 产生 Test Report Artifact
+7. Reviewer 产生 Review Artifact
+8. Contract 被修改，旧 Knowledge 自动标记 STALE
+9. Context Receipt 能解释新 Agent 为什么拿到新 Decision 而不是旧版本
+10. Project Control Center 出现 Artifact Review / Stale Knowledge Attention
+```
+
+如果这条链跑通，才说明：
+
+```text
+多 Agent 真的共享项目事实
+```
+
+而不是：
+
+```text
+大家只是共享一段越来越长的聊天记录。
+```
+
+
+# 307. v0.32 Decision Log — Project Knowledge / Decision / Artifact / Shared Context
+
+## D-309 — Project Shared Context 不属于 Agent Memory
+
+**决定：** Project 共同事实使用独立的 Knowledge / Decision / Requirement / Contract / Artifact 数据模型；禁止以 Shared Memory 方式合并各 Agent 私有 MemorySpace。  
+**状态：** Accepted
+
+## D-310 — 项目共享事实必须具有稳定 ID、Revision 与 SourceRefs
+
+**决定：** 可长期参与 Agent Context 的 Project Truth Object 必须可追溯、可版本化，并能回到 Conversation / Run / Workspace / Review 等来源。  
+**状态：** Accepted
+
+## D-311 — Decision 是一等对象并支持 Supersede Lineage
+
+**决定：** Accepted Decision 不通过静默覆盖改变历史；重大语义变化建立新 Decision 并显式 supersede 旧 Decision。  
+**状态：** Accepted
+
+## D-312 — Agent 可以提出 Decision / Knowledge Candidate，但发布受 Governance 控制
+
+**决定：** Agent 具有高自治提议能力；是否成为 canonical shared truth 由 Project Governance Policy 决定，并始终保留审计。  
+**状态：** Accepted
+
+## D-313 — Requirement / Contract 与普通 Knowledge 分离
+
+**决定：** 会直接约束 Mission Planner、Task DoD、Reviewer 或实现兼容性的 Requirement / Contract 使用结构化对象，不埋在普通说明文本中。  
+**状态：** Accepted
+
+## D-314 — Artifact Registry 不复制 Workspace 大文件
+
+**决定：** Artifact 是产品层交付物记录，通过 ResourceRef 指向真实文件；Workspace Provider 继续拥有文件字节真源。  
+**状态：** Accepted
+
+## D-315 — Artifact 必须支持 Task / Run / Agent / Review Lineage
+
+**决定：** 可交付 Artifact 能追溯到需求、任务、Agent Run、Workspace ChangeSet 与 Review 证据。  
+**状态：** Accepted
+
+## D-316 — Conversation / Run 进入 Knowledge 必须经过 Promotion Pipeline
+
+**决定：** 聊天和 Agent 输出默认只是来源证据；进入 Project Knowledge 需 Candidate → Source Check → Dedup/Conflict → Governance → Publish。  
+**状态：** Accepted
+
+## D-317 — Agent Private Memory 不自动发布到 Project
+
+**决定：** Agent 可以基于私有经验提出新的共享 Knowledge Candidate，但不得直接复制或开放其 Private Memory 对象；共享内容应重新以 Project Source Grounding。  
+**状态：** Accepted
+
+## D-318 — Project Baseline Context 是可重建 Projection
+
+**决定：** 为缓存和稳定 Context 维护小型 Project Baseline Context，但其内容必须从 active Requirement / Decision / Contract 等真源编译，不建立第二套人工真源。  
+**状态：** Accepted
+
+## D-319 — Shared Context Broker 采用 Authority / Freshness / Token Budget 检索
+
+**决定：** Agent 可连接整个 Project 数据面，但每次只装配必要 Context；canonical/active 项优先，superseded/stale/candidate 默认不得与正式事实同权。  
+**状态：** Accepted
+
+## D-320 — 每个重要 Context 装配可生成 ProjectContextReceipt
+
+**决定：** Shared Context 的检索、选择、丢弃与延迟可审计，与 MemoryTurnReceipt 等一起进入 Glass Box。  
+**状态：** Accepted
+
+## D-321 — Derived Knowledge 必须支持 Staleness Invalidation
+
+**决定：** Source Resource/Contract revision 变化后，只把直接依赖的派生 Knowledge / chunk / projection 标记 stale 并增量重建。  
+**状态：** Accepted
+
+## D-322 — Knowledge / Decision / Artifact 可视化只是真源 Projection
+
+**决定：** Graph、Timeline、Decision Map、Artifact Lineage 不能拥有独立业务状态；底层对象与 Event/Ref 才是真源。  
+**状态：** Accepted
+
+## D-323 — Project Truth 修改采用 Revision-first
+
+**决定：** 用户和 Agent 的修改都产生新 revision / supersede lineage；禁止原地无痕覆盖长期项目事实。  
+**状态：** Accepted
+
+## D-324 — Multi-Agent Handoff 优先传 Ref，不复制共享事实正文
+
+**决定：** Handoff / Task Contract 传 Decision/Requirement/Artifact/Workspace stable refs，执行时由 Context Broker 解析当前有效 revision；需要可复现时允许显式 pin revision。  
+**状态：** Accepted
+
+## D-325 — Project Knowledge 大规模性能采用增量索引
+
+**决定：** FTS / Vector / Entity / Source Dependency Index 均按 Resource revision 增量更新；普通页面打开不得扫描全部 Workspace 或重算整个 Project。  
+**状态：** Accepted
+
+
+# 308. v0.33 总原则：Search Engine 负责“找候选”，Context Broker 负责“决定给 Agent 什么”
+
+前一轮已经确定 Project Shared Context 与 Agent Private Memory 分离。本轮进一步把检索系统拆成两个职责：
+
+```text
+Search / Retrieval Engine
+= 从大量对象中快速找到候选
+
+Context Broker
+= 基于权限、Authority、Freshness、Task、Token Budget
+  选择最终进入 Agent Context 的内容
+```
+
+禁止把两者合并成一个“RAG 黑盒”。
+
+例如用户搜索：
+
+```text
+Runtime Router
+```
+
+Search Engine 可以返回：
+
+```text
+Decision D-412
+Contract C-8
+Knowledge K-82
+router.rs
+Conversation #281
+Run R-92
+Artifact A-72
+```
+
+而 Coding Agent 当前执行 `Implement Runtime Router` 时，Context Broker 可能最终只选择：
+
+```text
+D-412
+C-8
+K-82
+router.rs relevant symbols
+A-72 test report
+```
+
+因此：
+
+> **Search Result ≠ Agent Context。**
+
+
+# 309. 用户搜索与 Agent Retrieval 共用基础设施，但不能共用默认 Scope
+
+正式区分两种调用面：
+
+```text
+User Global Search
+```
+
+用于用户主动查找：
+
+```text
+Conversation
+Project Truth
+Workspace
+Artifact
+Agent
+Skill
+Plugin
+Model
+Run / Task
+```
+
+以及：
+
+```text
+Agent Retrieval
+```
+
+用于 Runtime 前的 Context 装配。
+
+两者可以共用：
+
+```text
+Parser
+Chunker
+FTS Index
+Vector Index
+Entity Index
+Fusion
+Rerank
+```
+
+但是默认 Scope 必须不同。
+
+例如一个 Agent 的 Private Memory：
+
+```text
+memory://agent/A
+```
+
+只有 Agent A 的 Mandatory Memory Lifecycle 可以默认查询。
+
+用户本人在 Memory Studio 中可以主动搜索 A 的 Memory；Agent B 即使和 A 属于同一用户，也不能因为 Global Search 引擎存在就自动跨读 A 的 Memory。
+
+因此所有 Query 必须先解析：
+
+```text
+SearchScope
++
+Caller Identity
++
+Source Policy
+```
+
+再进入索引。
+
+
+# 310. SearchScope：先缩小搜索空间，再做检索
+
+统一定义 SearchScope：
+
+```ts
+interface SearchScope {
+  userId: string
+  agentId?: string
+  projectId?: string
+  workItemId?: string
+  conversationId?: string
+  roomId?: string
+  workspaceIds?: string[]
+
+  sourceTypes?: SearchSourceType[]
+  statuses?: string[]
+  timeRange?: TimeRange
+}
+```
+
+常见 Source Type：
+
+```text
+agent-memory
+project-requirement
+project-decision
+project-contract
+project-knowledge
+artifact
+workspace-resource
+workspace-content
+conversation
+room-event
+run-event
+task
+agent
+skill
+plugin
+model
+```
+
+搜索性能原则：
+
+> **Scope First, Search Second。**
+
+不要先在 100 万对象里做语义搜索，再在最后阶段过滤到某个 Project。
+
+应尽量把：
+
+```text
+projectId
+agent namespace
+source type
+status
+revision
+```
+
+转成索引层可执行 filter。
+
+
+# 311. Retrieval Planner：默认不调用 LLM 也能完成绝大多数检索
+
+首版 Retrieval Planner 使用确定性规则和索引能力，不默认增加一次“让模型改写 Query”的 LLM 调用。
+
+推荐执行链：
+
+```text
+Query
+  ↓
+Scope Resolver
+  ↓
+Direct Resolver
+  ↓
+Metadata / Exact Match
+  ↓
+FTS / BM25
+  ↓
+Vector Semantic Search（需要时）
+  ↓
+Entity / Source Graph Expansion（需要时）
+  ↓
+Rank Fusion
+  ↓
+Authority / Freshness / Lineage Filter
+  ↓
+Optional Lightweight Rerank
+  ↓
+Results / Context Candidates
+```
+
+其中：
+
+### Stage 0 — Direct Resolve
+
+优先处理：
+
+```text
+D-412
+C-8
+A-72
+router.rs
+ref://workspace/...
+Agent 名称
+Skill 名称
+```
+
+如果用户已经给出稳定 ID，不应该再做向量搜索。
+
+### Stage 1 — Metadata / FTS
+
+处理：
+
+```text
+精确词
+路径
+符号名
+函数名
+错误码
+Decision 标题
+文件名
+```
+
+### Stage 2 — Semantic
+
+只有关键词不足时再补：
+
+```text
+“我们之前为什么不让 DeepSeek 永久做 Lead？”
+```
+
+这种语义问题。
+
+### Stage 3 — Graph Expansion
+
+例如已经命中：
+
+```text
+D-412
+```
+
+再按关系扩展：
+
+```text
+supersedes
+implements
+produced-by
+depends-on
+reviewed-by
+source-of
+```
+
+但必须有边数 / 深度限制。
+
+
+# 312. 三种搜索模式：Instant / Hybrid / Deep
+
+用户界面和 Agent Retrieval 都可以共用三档策略：
+
+```text
+INSTANT
+```
+
+目标：几十毫秒级第一批结果。
+
+只跑：
+
+```text
+ID / Metadata / FTS / Hot Cache
+```
+
+```text
+HYBRID
+```
+
+默认。
+
+追加：
+
+```text
+FTS + Vector + Fusion
+```
+
+```text
+DEEP
+```
+
+仅当用户明确要求或 Context Broker 判断普通检索不足时使用：
+
+```text
+Query Expansion
+多跳关系
+Cold Archive
+更大候选集
+更昂贵 Rerank
+必要时 Query Rewrite / HyDE
+```
+
+原则继续保持：
+
+> **Deep Retrieval 是升级路径，不是每次输入的固定成本。**
+
+
+# 313. 检索排序先处理“真伪与新旧”，再处理“像不像”
+
+纯向量相似度不能决定项目事实优先级。
+
+例如：
+
+```text
+D-087  DeepSeek Permanent Lead    SUPERSEDED
+D-412  Dynamic Lead Runtime       ACCEPTED
+```
+
+即使旧 Decision 与 Query 的 embedding 更相似，也不能排在新正式 Decision 前。
+
+因此 Rank 必须综合：
+
+```text
+Authority
+Status
+Freshness
+Revision / Lineage
+Exact Match
+Lexical Score
+Semantic Score
+Project / Task Affinity
+Source Reliability
+Recency（只对适合的对象）
+Usage Feedback
+```
+
+其中：
+
+```text
+SUPERSEDED
+STALE
+RETRACTED
+CANDIDATE
+```
+
+默认要有明显 penalty，某些 Agent Context 场景直接 filter 掉。
+
+正式原则：
+
+> **Semantic Similarity cannot override Canonical Truth State。**
+
+
+# 314. Hybrid Fusion：优先采用可解释的确定性融合
+
+首版不依赖一个额外 LLM 对所有候选重新排序。
+
+推荐：
+
+```text
+BM25 / FTS rank
++
+Vector rank
++
+Metadata boosts
++
+Authority / Freshness rules
+      ↓
+Reciprocal Rank Fusion / weighted fusion
+```
+
+RRF 的优点是：
+
+- 不要求 FTS 分数与 Vector 分数处于同一数值尺度；
+- 容易解释；
+- 容易做增量和 benchmark；
+- 某一个索引暂时不可用时可以降级。
+
+如果以后增加 Cross-Encoder / LLM Reranker，只对 Top-N 小候选集执行，并记录：
+
+```text
+rerankerId
+version
+inputCount
+outputCount
+latency
+cost
+```
+
+
+# 315. SearchIndexProvider / VectorIndexProvider：不把 Workbench 绑死到某一个搜索数据库
+
+和 Runtime / Memory / Workspace 一样，搜索底层通过 Provider Contract 接入。
+
+建议：
+
+```ts
+interface SearchIndexProvider {
+  probe(): Promise<SearchCapabilities>  upsert(docs: SearchDocument[]): Promise<void>
+  delete(refs: SearchDocumentRef[]): Promise<void>
+  query(input: LexicalSearchRequest): Promise<SearchHit[]>
+  commit?(): Promise<void>
+}
+
+interface VectorIndexProvider {
+  probe(): Promise<VectorCapabilities>
+  upsert(vectors: VectorDocument[]): Promise<void>
+  delete(refs: VectorDocumentRef[]): Promise<void>
+  query(input: VectorSearchRequest): Promise<SearchHit[]>
+}
+```
+
+Workbench 内部只依赖：
+
+```text
+SearchDocument
+SearchHit
+SearchScope
+SearchReceipt
+```
+
+不让 Tantivy / Qdrant / LanceDB 私有对象渗入业务层。
+
+
+# 316. 开源技术路线：优先 Embedded / Rust-native，不依赖 Docker
+
+结合 Linux-first、Tauri/Rust、本地优先与“No Docker official path”，本轮建议进入技术 Spike 的开源组件：
+
+### Tantivy
+
+定位：
+
+```text
+Full Text / BM25 / structured filtering
+```
+
+优点：
+
+- Rust library，可直接嵌入；
+- 支持全文检索、BM25、增量 indexing；
+- 不是必须单独运行的服务；
+- MIT License；
+- 对中文可通过第三方 tokenizer 集成方案评估。
+
+因此非常适合作为：
+
+```text
+Local SearchIndexProvider
+```
+
+候选。
+
+### Qdrant / Qdrant Edge
+
+定位：
+
+```text
+Vector / Semantic Search
+```
+
+Qdrant 主项目是 Rust + Apache-2.0；当前项目还提供 Qdrant Edge，这一路线允许向量索引直接在应用/Edge 环境内运行，并可将来和服务器 Qdrant 衔接。
+
+因此值得验证：
+
+```text
+Local VectorIndexProvider
+→ Qdrant Edge
+
+Server / Cluster VectorIndexProvider
+→ Qdrant Server
+```
+
+这种同生态迁移路径。
+
+### LanceDB
+
+LanceDB 也是很强的候选：
+
+```text
+embedded
+vector
+columnar
+local-first
+Rust SDK
+```
+
+而且支持本地开源部署和数据版本能力。
+
+但我们第一阶段不直接宣布 Tantivy + Qdrant Edge 为最终选择，也不宣布 LanceDB 为最终选择。
+
+先做统一 benchmark：
+
+```text
+100k / 1M chunks
+中文 + 英文
+FTS
+Vector
+Hybrid
+incremental update
+cold start
+RAM
+index size
+crash recovery
+upgrade
+```
+
+再决定默认 Provider。
+
+
+# 317. 不建议把 Meilisearch / Elasticsearch 类服务作为首版本机默认依赖
+
+这类完整 Search Server 很适合团队服务器或未来大规模 Search Node，但第一版桌面本机默认路径更希望：
+
+```text
+single app / native service
+low idle RAM
+offline
+no container
+simple backup
+```
+
+因此首版本机优先：
+
+```text
+Embedded index
+```
+
+未来服务器模式可以新增：
+
+```text
+Remote SearchIndexProvider
+Remote VectorIndexProvider
+```
+
+而不是现在把桌面客户端强依赖一个长期后台 Search Server。
+
+
+# 318. SearchDocument / ChunkProjection：索引只是真源的可重建投影
+
+统一索引记录建议：
+
+```ts
+interface SearchDocument {
+  docId: string
+  sourceRef: string
+  sourceType: SearchSourceType
+  ownerScope: string
+
+  sourceRevision: string
+  chunkId?: string
+
+  title?: string
+  text: string
+  pathHint?: string
+
+  status?: string
+  authority?: number
+  createdAt?: string
+  updatedAt?: string
+
+  entityRefs?: string[]
+  relationRefs?: string[]
+
+  contentHash: string
+  parserVersion: string
+  tokenizerVersion: string
+  embeddingVersion?: string
+}
+```
+
+Search Index 不拥有业务真源。
+
+如果索引损坏：
+
+```text
+Canonical Source
+      ↓
+Rebuild Projection
+      ↓
+Search Index
+```
+
+而不是反过来从 Search DB 恢复 Project Truth。
+
+
+# 319. Chunking 必须按对象类型，而不是“一刀切 500 tokens”
+
+不同对象的 Chunk 策略不同：
+
+```text
+Decision
+→ 通常整对象索引
+
+Requirement / Contract
+→ 结构化 section
+
+Code
+→ symbol / function / class / diff hunk
+
+Markdown / Docs
+→ heading section
+
+Conversation
+→ turn window / topic segment
+
+Run Event
+→ semantic event summary + exact evidence ref
+
+Video
+→ transcript segment + keyframe refs
+
+3D / Blender
+→ metadata / scene object / derived manifest
+```
+
+禁止：
+
+```text
+所有东西
+→ 固定字符数切块
+```
+
+因为会破坏：
+
+```text
+代码边界
+Decision 完整性
+Contract clause
+Source provenance
+```
+
+
+# 320. 大文件和二进制：只索引派生层，不复制原始内容
+
+继续沿用 Workspace 原则。
+
+例如 20GB 视频：
+
+```text
+原始视频
+→ Workspace 真源
+```
+
+搜索层索引：
+
+```text
+metadata
+transcript
+chapter
+keyframe caption / OCR（如有）
+artifact relation
+```
+
+`.blend`：
+
+```text
+scene metadata
+object names
+materials
+external dependencies
+render metadata
+```
+
+而不是：
+
+```text
+把整个二进制塞进 Vector DB
+```
+
+
+# 321. Index Update Pipeline：Revision-driven incremental indexing
+
+所有 Source 更新走统一增量管线：
+
+```text
+Source Revision Changed
+        ↓
+Index Invalidation Queue
+        ↓
+Parser / Extractor
+        ↓
+Chunk Diff
+        ↓
+只删除 removed chunks
+只更新 changed chunks
+只新增 new chunks
+        ↓
+FTS delta
+Optional Vector delta（仅启用 Semantic Extension 时）
+Entity / Symbol delta
+Dependency delta
+```
+
+避免：
+
+```text
+一个 README 改一行
+↓
+重新 embedding 整个 Repo
+```
+
+建议每个 chunk 维护：
+
+```text
+contentHash
+parserVersion
+optionalEmbeddingVersion
+```
+
+Hash 没变：
+
+```text
+不重新解析 / 不重新写 FTS
+可选 Vector Extension 启用时也不重复 embedding
+```
+
+
+# 322. Optional Embedding / Vector Extension（非默认基础设施）
+
+Embedding 不再属于首版默认依赖。只有管理员显式启用 Semantic Retrieval Extension 时，才需要配置 Embedding；默认安装与默认 Agent Turn 均不得要求它存在。
+
+由管理员 Model / Infrastructure 配置维护：
+
+```text
+EmbeddingProfile
+id
+model
+provider
+dimension
+version
+languages
+cost
+local/remote
+```
+
+当 embedding model 升级：
+
+```text
+v1 index
+仍然服务
+
+v2
+后台增量/批量重建
+```
+
+完成后：
+
+```text
+atomic switch
+```
+
+不要：
+
+```text
+升级 embedding model
+↓
+整个 Search 一小时不可用
+```
+
+因此 Search Document 记录：
+
+```text
+embeddingVersion
+```
+
+并允许 dual-index migration。
+
+
+# 323. Search UI：一个统一入口，但结果按“对象类型”组织
+
+建议桌面全局入口：
+
+```text
+Ctrl / Cmd + K
+```
+
+或顶部 Search。
+
+用户输入：
+
+```text
+Runtime Router
+```
+
+第一帧先显示快速结果：
+
+```text
+Top
+D-412 Dynamic Lead Runtime
+C-8 Runtime Contract
+src/runtime/router.rs
+
+Decisions
+...
+
+Files
+...
+
+Conversations
+...
+
+Artifacts
+...
+```
+
+不要把所有结果压成一个难以理解的 100 行平铺列表。
+
+支持过滤：
+
+```text
+Project
+Agent
+Source Type
+Status
+Time
+Workspace
+```
+
+高级用户可支持轻量 query syntax：
+
+```text
+type:decision runtime router
+project:workbench status:active
+file:*.rs router
+```
+
+但普通用户不依赖语法才能搜索。
+
+
+# 324. Progressive Search：先快，再逐步变聪明
+
+搜索交互采用渐进式结果：
+
+```text
+0~50ms
+Direct / Metadata / FTS
+        ↓
+50~200ms
+Hybrid Vector results
+        ↓
+需要时
+Graph / Deep Retrieval / Rerank
+```
+
+UI 不等待所有阶段完成才一次性显示。
+
+结果可显示：
+
+```text
+Searching deeper…
+```
+
+并增量插入高价值候选，但避免明显跳动：
+
+- 已选中项位置稳定；
+- 搜索输入焦点不丢；
+- 结果分组稳定；
+- 后续阶段只做局部 rerank。
+
+
+# 325. Retrieval Budget：检索本身也有延迟和成本预算
+
+正式定义：
+
+```ts
+interface RetrievalBudget {
+  maxLatencyMs: number
+  maxCandidates: number
+  maxVectorQueries: number
+  maxGraphHops: number
+  maxRerankItems: number
+  maxEmbeddingCost?: number
+  maxContextTokens?: number
+}
+```
+
+例如 Composer 自动补上下文：
+
+```text
+Balanced
+max latency 150ms
+```
+
+而用户明确点击：
+
+```text
+Deep Search
+```
+
+可以允许：
+
+```text
+2~5s
+更大候选集
+多跳关系
+高级 rerank
+```
+
+这样不会让所有普通 Agent Turn 都被最慢检索路径拖住。
+
+
+# 326. SearchReceipt / RetrievalTrace：为什么找到、为什么没选，都能查
+
+新增：
+
+```ts
+interface SearchReceipt {
+  queryId: string
+  callerType: 'user' | 'agent' | 'system'
+  scope: SearchScope
+  mode: 'instant' | 'hybrid' | 'deep'
+
+  directHits: number
+  lexicalHits: number
+  vectorHits: number
+  graphExpanded: number
+
+  fusedCandidates: number
+  selected: number
+
+  dropped: Record<string, number>
+  latencyMs: number
+
+  providerVersions: string[]
+  embeddingVersion?: string
+}
+```
+
+Glass Box 可以显示：
+
+```text
+SEARCH TRACE
+
+Scope
+Project: Team Workbench
+
+FTS
+32 hits
+
+Vector
+18 hits
+
+Fusion
+41 unique
+
+Dropped
+Superseded   4
+Stale        3
+Duplicate    11
+Scope        8
+
+Selected
+7
+
+Latency
+63ms
+```
+
+这样“AI 为什么没找到我们明明写过的东西”可以真正调试。
+
+
+# 327. Search Feedback 只作为弱信号，不能直接改写项目真源
+
+用户点击结果、打开文件、引用 Decision、最终采用 Artifact，可以形成：
+
+```text
+search.clicked
+search.opened
+search.used_in_context
+search.result_helpful
+```
+
+用于以后调排名。
+
+但搜索反馈只能调整：
+
+```text
+ranking feature
+```
+
+不能：
+
+```text
+因为很多 Agent 搜到某条旧 Knowledge
+→ 自动把它变成 canonical truth
+```
+
+Truth Governance 与 Search Ranking 必须分离。
+
+
+# 328. 首版端到端 benchmark / 验收场景
+
+建议构造：
+
+```text
+100,000 Search Documents
+其中：
+20k Conversation chunks
+20k Project truth / docs
+50k Workspace text/code chunks
+10k Artifact / Run / Task / registry objects
+```
+
+再增加：
+
+```text
+中文
+英文
+中英混合
+代码符号
+路径
+Decision stable IDs
+stale/superseded lineage
+```
+
+至少验证：
+
+```text
+1. D-412 精确 ID 可以直接命中
+2. “为什么不用永久 DeepSeek Lead”能召回当前 Accepted Decision
+3. superseded Decision 不应排到 active Decision 前
+4. router.rs 路径 / symbol 查询首批结果低延迟
+5. Agent A Private Memory 永远不会被 Agent B 默认检索
+6. 修改一个代码函数只增量更新对应 chunk
+7. embedding v1 → v2 可以后台迁移，搜索不中断
+8. Vector Provider 失败时仍可 FTS degraded 搜索
+9. Index 删除后可以从 canonical source 重建
+10. SearchReceipt 可以解释每一步候选数与过滤原因
+```
+
+首批工程目标可先设为内部预算而非承诺：
+
+```text
+Direct / ID lookup P95 < 20ms
+Local FTS first page P95 < 50ms
+Hybrid local search P95 < 150ms
+UI first visible result < 100ms
+```
+
+实际值必须在 Linux 目标硬件上 benchmark 后修订。
+
+
+# 329. v0.33 Decision Log — Search / Retrieval / Knowledge Engine
+
+## D-326 — Search Engine 与 Context Broker 分层
+
+**决定：** Search Engine 负责候选召回，Context Broker 负责最终上下文选择；Search Result 不是 Agent Context，禁止以一个不可解释 RAG 黑盒同时承担两层职责。  
+**状态：** Accepted
+
+## D-327 — User Search 与 Agent Retrieval 共用基础设施但独立 Scope
+
+**决定：** Parser/Index/Fusion 可复用，但 Agent Private Memory、Project、Conversation 等 Source Scope 必须根据 caller 与 namespace 明确解析；Global Search 的存在不得突破 Per-Agent Memory 隔离。  
+**状态：** Accepted
+
+## D-328 — Retrieval 默认采用分层确定性策略
+
+**决定：** 默认执行 Direct Resolve → Metadata/FTS/BM25 → Symbol/Relation/Graph Expansion → Authority/Freshness 排序。Semantic Vector / Embedding / 专用 Reranker 不属于默认链路，仅为管理员显式启用的可选扩展；必要的复杂检索优先由当前正在执行任务的主模型通过 Workbench Search Tools 继续检索，而不是强制增加专用模型调用。  
+**状态：** Accepted
+
+## D-329 — Search Scope First
+
+**决定：** Project/Agent/Source Type/Status 等过滤尽量下推到索引层，禁止先全库 semantic search 再在最后阶段才做权限和作用域裁剪。  
+**状态：** Accepted
+
+## D-330 — Canonical Truth State 优先于 Semantic Similarity
+
+**决定：** Accepted/Active/Current revision 等 Authority/Freshness/Lineage 状态参与硬过滤或强权重；superseded/stale/candidate 不能仅凭 embedding 相似度压过 canonical truth。  
+**状态：** Accepted
+
+## D-331 — 首版 Hybrid Fusion 优先使用可解释的确定性融合
+
+**决定：** 默认使用 FTS/BM25、metadata、symbol/relation、authority/freshness 的确定性融合。若未来启用 Vector Extension，再把向量结果作为额外候选并可使用 RRF/weighted fusion；专用 reranker 默认关闭。  
+**状态：** Accepted
+
+## D-332 — 搜索底层通过 Provider Contract 接入
+
+**决定：** Workbench 业务层依赖 SearchIndexProvider / VectorIndexProvider，不绑定某个开源数据库的私有对象；本机、服务器和未来集群实现可替换。  
+**状态：** Accepted
+
+## D-333 — Embedded / Rust-native 是 Linux Desktop 首选方向
+
+**决定：** 首版优先评估 SQLite FTS5 / Tantivy 作为无需模型、无需 Docker 的本地全文与元数据索引。Qdrant Edge / LanceDB 仅作为未来可选 Vector Extension 技术 Spike，不进入默认部署依赖。  
+**状态：** Accepted
+
+## D-334 — Search Index 是可重建 Projection
+
+**决定：** SearchDocument / Chunk / Vector / Entity Index 都不是业务真源；损坏后必须能由 Memory/Project/Workspace/Conversation/Event 等 canonical source 重建。  
+**状态：** Accepted
+
+## D-335 — Chunking 按 Source Type 设计
+
+**决定：** Code、Decision、Contract、Markdown、Conversation、Video/3D derived metadata 使用不同 chunk policy；禁止全系统统一固定长度切块。  
+**状态：** Accepted
+
+## D-336 — Revision-driven 增量索引
+
+**决定：** Source revision 变化只重建受影响 chunk 与 FTS/metadata/symbol 索引项；利用 contentHash 避免未变化内容重复解析。只有可选 Vector Extension 已启用时才涉及增量 embedding。  
+**状态：** Accepted
+
+## D-337 — Embedding Index 必须版本化并支持无中断迁移
+
+**决定：** Embedding/Vector 属于可选扩展，不是默认基础设施。仅在管理员显式启用该扩展后，Embedding profile 才进入版本化管理，并采用 versioned index + background rebuild + atomic switch；关闭扩展时 Search 仍完整运行于 Direct/FTS/metadata/symbol 路径。  
+**状态：** Accepted
+
+## D-338 — Search UI 采用渐进式结果
+
+**决定：** Direct/FTS 先显示，Hybrid/Deep 结果后台补充；用户不等待最慢阶段才能获得首批搜索结果。  
+**状态：** Accepted
+
+## D-339 — Retrieval 具有独立预算
+
+**决定：** 每次检索受 latency/candidate/graph/context-token budget 控制；vector/rerank budget 字段只有可选扩展启用时才生效。普通 Agent Turn 默认不产生独立 Embedding/Reranker 费用。  
+**状态：** Accepted
+
+## D-340 — Search / Retrieval 全程可观测
+
+**决定：** 用户搜索、Agent Context Retrieval 与 Deep Search 都可生成 SearchReceipt / RetrievalTrace，记录 Scope、候选来源、过滤原因、索引/Provider 版本和延迟；Embedding 版本仅在可选 Semantic Extension 启用时记录。  
+**状态：** Accepted
+
+
+# 341. v0.33.1 Correction — Composer-first Search UX / Cloud Model First
+
+本轮对 v0.33 做两个重要修正。
+
+第一，Search / Retrieval Engine 是底层基础设施，不等于产品必须新增一个常驻的“全局搜索框”。Agent 页面继续以 Composer / Chat 为主要入口。用户可以直接说：
+
+```text
+帮我找一下之前关于 Runtime Router 的决定
+```
+
+Workbench 在后台调用 Retrieval Planner / Search Gateway，再把结果作为引用或上下文返回。用户无需切换到独立 Search 页面。
+
+建议 UI 分层：
+
+```text
+Agent Page
+→ Composer First
+→ 不常驻 Global Search Box
+
+Workspace
+→ 保留 Windows Explorer 风格文件搜索
+
+Project Knowledge
+→ 保留当前范围 Knowledge / Decision / Artifact 搜索
+
+Ctrl+K
+→ 可选的高级 Command / Global Search Palette
+```
+
+因此：
+
+> Search Infrastructure 必须存在；Standalone Global Search UI 不是主流程必需品。
+
+第二，项目不假设部署本地推理 / Embedding 模型服务器。默认部署模式改为：
+
+```text
+Workbench Desktop / Server
+        │
+        ├── Local Metadata / FTS / Cache / Projection
+        │   SQLite / Tantivy / local cache
+        │
+        └── Cloud Model Providers
+            ├── reasoning / chat models
+            ├── coding models
+            ├── multimodal models
+            ├── optional embedding API（默认关闭）
+            └── optional reranker API（默认关闭）
+```
+
+模型可以是云厂商提供的 proprietary model，也可以是云端托管的 open-weight / open-source family；Workbench 只依赖 Provider Contract，不要求用户自己运行 GPU Model Server。
+
+需要特别区分：
+
+```text
+Tantivy / SQLite / Local Cache
+= 本地索引 / 数据组件
+≠ 本地 AI 模型
+```
+
+因此即使完全没有本地模型，仍然可以快速完成：
+
+```text
+ID / path lookup
+metadata search
+FTS / BM25
+recent / status / revision filter
+```
+
+默认 Retrieval 不调用 Embedding。只有管理员未来显式启用可选 Semantic Retrieval Extension 时，系统才调用配置的 Cloud Embedding Provider 生成向量。Vector Index 可以本地保存，也可以放到服务器；该扩展关闭时不创建 Vector Index，也不产生 Embedding API 费用。
+
+如果 可选 Cloud Embedding Provider 暂时不可用或根本未启用，系统降级为：
+
+```text
+Direct Resolve
++ Metadata
++ FTS / BM25
++ Symbol / Relation Index
++ Authority / Freshness
+```
+
+而不是让整个 Agent Retrieval 失效。
+
+# 342. v0.33.1 Decision Log
+
+## D-341 — Composer 是 Agent 页主入口
+
+**决定：** Agent 页面继续以 Chat / Composer 为唯一主要输入入口；Search Engine 的存在不要求增加常驻全局 Search Box。用户可通过自然语言让 Agent 查找历史、Decision、Workspace 与 Project Knowledge。  
+**状态：** Accepted
+
+## D-342 — 独立搜索 UI 按场景提供，不成为强制主导航
+
+**决定：** Workspace 保留 Explorer 风格文件搜索；Project Knowledge 可提供范围搜索；Ctrl+K Global Search / Command Palette 作为可选高级能力。是否在主导航展示独立 Search 页面留到 UX 验证后决定。  
+**状态：** Accepted
+
+## D-343 — Agent Retrieval 默认后台执行
+
+**决定：** Agent 发言 / Mission / Context Broker 所需检索由 Retrieval Planner 在后台调用 Search Gateway；用户无需显式进入搜索模式。检索结果仍通过 SearchReceipt / Context Receipt 可观察和调试。  
+**状态：** Accepted
+
+## D-344 — Cloud Model First
+
+**决定：** Workbench 不要求部署本地 LLM、Embedding 或 Reranker Server。默认通过 Admin Model Registry / Provider Registry 接入云端 API；模型可以是 proprietary 或云端托管 open-weight/open-source family。  
+**状态：** Accepted
+
+## D-345 — Local Indexing 不等于 Local Model
+
+**决定：** SQLite、Tantivy、metadata cache、local vector store 等可作为本地轻量数据/索引组件运行，它们不属于模型服务器。即使没有任何本地 AI 模型，Instant / FTS Search 仍可正常工作。  
+**状态：** Accepted
+
+## D-346 — Semantic Retrieval 可云端化并必须可降级
+
+**决定：** Embedding / reranking 默认关闭，不是 Workbench 的必需服务，也不应产生默认额外费用。首版 Retrieval 以 Direct/Metadata/FTS/BM25/Symbol/Relation/Authority Search 为主；未来管理员若显式启用云端 Semantic Extension，失败时也只能降级回默认链路，不能影响 Agent 正常工作。  
+**状态：** Accepted
+
+
+# 343. v0.33.2 Correction — No-Embedding Baseline / Existing-LLM Retrieval
+
+本轮进一步修正 v0.33 / v0.33.1 对 Semantic Retrieval 的默认假设。项目预算优先，因此 **Embedding、Vector DB 与专用 Reranker 不进入首版默认依赖，也不要求管理员购买额外模型服务。**
+
+默认检索链路改为：
+
+```text
+User / Agent Intent
+        ↓
+Direct Resolve
+ID / ResourceRef / Path / Agent / Decision
+        ↓
+Metadata + FTS / BM25
+        ↓
+Symbol / Entity / Relation Index
+        ↓
+Authority / Freshness / Revision / Scope Filter
+        ↓
+Top-K Candidate Snippets / Refs
+        ↓
+Current Active LLM / Harness
+通过 workbench.search / read_resource 按需继续查找
+        ↓
+Context Broker
+        ↓
+Bounded Context
+```
+
+这里的关键点是：**不为了 Search 再增加一套专用模型账单。** 当前正在执行任务的 DeepSeek / Codex / Claude Code / OpenCode 等主模型本来就会被调用；只有当普通 FTS / Metadata 结果不够时，它才在自己的正常 Agent Loop 中使用 Workbench Search Tools 继续检索、换关键词、打开候选、读取引用。这个过程消耗的是当前任务本身的模型 Token，不要求另外购买 Embedding 或 Reranker 服务。
+
+默认 Search Provider 第一阶段可优先采用：
+
+```text
+SQLite / indexed metadata
++ SQLite FTS5 或 Tantivy BM25
++ path / file-name index
++ code symbol index
++ Decision / Requirement / Artifact stable-ID index
++ source relation / supersede / dependency index
+```
+
+对于中文与代码检索，应通过 tokenizer、别名表、symbol/path 索引与结构化字段提高召回，而不是因为没有向量就退化成简单字符串 `LIKE '%query%'`。
+
+当用户输入较模糊的自然语言，例如：
+
+```text
+我们以前为什么不让 DeepSeek 永久做 Lead？
+```
+
+首轮可以直接用原始用户文本做 BM25 / 字段检索；若候选不足，当前 Lead / Personal Agent 可以在同一次工作过程中调用：
+
+```text
+workbench.search("永久 Lead DeepSeek")
+workbench.search("Dynamic Lead Runtime")
+workbench.get("ref://decision/...")
+```
+
+也就是说，**语义理解由现有大模型承担，候选检索由便宜的确定性索引承担。** 不强制再引入一个独立 Semantic Model。
+
+Vector Semantic Retrieval 仍保留扩展接口，但默认：
+
+```text
+semanticRetrieval.enabled = false
+embeddingProvider = null
+rerankerProvider = null
+vectorIndex = null
+```
+
+只有将来项目规模、模糊召回质量或实际 Benchmark 明确证明“没有向量无法满足需求”，管理员才可以安装 / 启用 Semantic Retrieval Extension。启用前必须显示预计额外成本；关闭后系统仍保持完整可用。
+
+SearchReceipt 也相应调整。默认可以只记录：
+
+```text
+directHits
+lexicalHits
+metadataHits
+symbolHits
+relationExpanded
+selected
+dropped
+latencyMs
+```
+
+`vectorHits / embeddingVersion / rerankProvider` 变成 optional 字段。
+
+因此 Workbench 首版可以做到：
+
+```text
+有 Search / Retrieval
+有 Knowledge Context
+有 Agent Memory Recall
+有 Project Decision 查找
+有 Workspace / Code 查找
+
+但：
+不部署 Embedding Server
+不购买 Embedding API
+不部署 Vector DB
+不购买 Reranker API
+```
+
+这更符合成本受限的真实部署环境。
+
+# 344. v0.33.2 Decision Log
+
+## D-347 — No-Embedding Baseline
+
+**决定：** Embedding、Vector Search 与专用 Reranker 从默认架构中移除。首版系统在完全没有这些服务的情况下必须能够正常完成 Agent Retrieval、Project Knowledge 查找和 Workspace Search。  
+**状态：** Accepted
+
+## D-348 — Existing LLM Performs Semantic Reasoning
+
+**决定：** 当确定性 FTS / Metadata / Symbol 检索不足时，优先让当前已经执行任务的主 Agent 模型通过 Workbench Search Tools 迭代查询与读取候选；不为了语义搜索强制新增一个独立模型调用链或专用模型账单。  
+**状态：** Accepted
+
+## D-349 — Default Retrieval Is Lexical + Structured
+
+**决定：** 默认检索核心为 Direct Resolve、Metadata、FTS/BM25、Path/Symbol/Entity/Relation Index、Authority/Freshness/Revision 与 Scope Filter；禁止把默认实现退化成全库线性扫描或 `%LIKE%`。  
+**状态：** Accepted
+
+## D-350 — Semantic Retrieval Is an Optional Extension
+
+**决定：** VectorIndexProvider / EmbeddingProvider / RerankerProvider 保留接口兼容性，但默认 `disabled/null`。只有管理员显式启用 Semantic Retrieval Extension 时才创建向量索引并产生对应费用。  
+**状态：** Accepted
+
+## D-351 — Search Must Survive With Zero Extra AI Services
+
+**决定：** 除当前用户已经配置并正在使用的主 LLM/Runtime 外，Search/Knowledge 基础功能不得要求第二类付费 AI 服务；Embedding/Reranker 服务缺失不属于 Degraded 状态，而是正常默认状态。  
+**状态：** Accepted
+
+## D-352 — Semantic Extension Must Be Cost-Justified
+
+**决定：** 未来只有在真实 Benchmark 证明 lexical/structured retrieval 的召回质量不足，且收益能够覆盖新增费用与运维复杂度时，才推荐启用 Semantic Retrieval；UI 在启用前显示 Provider、价格/预算与预计索引量。  
+**状态：** Accepted
+
+# 345. v0.34 — Deterministic Ingestion / On-Demand Multimodal Understanding
+
+v0.33.2 已经确定首版 Search 不依赖 Embedding / Vector / Reranker。下一步文件摄取也必须遵循同样的成本原则：**文件进入 Workspace 不等于立刻调用 AI 理解文件。**
+
+默认链路应当是：
+
+```text
+Workspace Resource
+      ↓
+Catalog / Type Detect
+      ↓
+Deterministic Parse
+      ↓
+Content Projection
+      ↓
+FTS / Metadata / Symbol Index
+      ↓
+Ready for Search
+```
+
+只有当前用户问题、Agent Task 或 Mission 明确需要更深理解时，才进入：
+
+```text
+Current Task
+      ↓
+Select Relevant Resource Region
+      ↓
+Materialization Plantext / page / image / frame / clip / metadata
+      ↓
+Current Active Multimodal LLM
+      ↓
+UnderstandingRecord
+      ↓
+Task Context / Optional Cached Hint
+```
+
+因此首版不存在“导入 10 万文件，然后后台悄悄把每个 PDF、图片、视频都发给模型理解一遍”的行为。模型成本应当和真实任务发生绑定，而不是和 Workspace 大小绑定。
+
+# 346. Workspace Truth 与 Content Projection
+
+文件系统或 Workspace Provider 继续拥有原始内容真源：
+
+```text
+ref://workspace/W1/resource/R17
+```
+
+Workbench 为检索和 Agent 使用生成的内容全部属于 Projection：
+
+```text
+SourceRecord
+   ├── ParseManifest
+   ├── ContentFragment[]
+   ├── DerivedAsset[]
+   ├── IndexProjection
+   └── UnderstandingRecord[] optional
+```
+
+其中：
+
+```text
+Original File
+= Truth
+
+Extracted deterministic text / metadata
+= Derived Projection
+
+LLM summary / visual interpretation / transcript interpretation
+= AI-derived Projection
+```
+
+AI-derived Projection 永远不能静默变成 Project Decision / Requirement / Contract。若其中某个结论需要成为项目共同事实，仍然必须通过 v0.32 的 Knowledge/Decision Candidate → Governance → Publish 流程。
+
+这避免以后出现：模型某次看图看错了，但错误描述因为被缓存而永久变成“项目真相”。
+
+# 347. 四级 Ingestion / Understanding Ladder
+
+每个资源维护一个 `IndexCoverage`，而不是简单的 `indexed=true/false`。
+
+```text
+L0 CATALOG
+文件名 / MIME / size / mtime / revision / provider metadata
+
+L1 STRUCTURED
+确定性文本、标题、表格、代码 symbol、文档结构、字幕、媒体 metadata
+
+L2 DERIVED
+thumbnail / page preview / waveform / keyframe / proxy / dependency manifest
+
+L3 AI UNDERSTANDING
+当前主模型对指定 page / frame / clip / fragment 的按需理解
+```
+
+默认 Workspace 后台做到 L0/L1；需要 Explorer Preview 时逐步做 L2；L3 默认不自动运行。
+
+例如一张 PNG 第一次进入 Workspace 可以是：
+
+```text
+Metadata        ✓
+Thumbnail       ✓
+Visual Meaning  NOT_ANALYZED
+```
+
+这不是错误，也不是 Degraded，而是正常状态。
+
+用户稍后问：
+
+```text
+“这张设计稿右侧按钮有什么问题？”
+```
+
+才由当前支持视觉的主模型分析这张图片，并形成与当前 `SourceRevision` 绑定的 UnderstandingRecord。
+
+# 348. Parser Host：解析器是插件能力，不是模型服务器
+
+Workbench Core 不应直接硬编码几十种文件格式。新增：
+
+```text
+ParserHost
+   ↓
+ParserProvider
+```
+
+ParserProvider 可以是：
+
+```text
+Rust in-process parser
+Sandboxed sidecar worker
+Existing trusted CLI
+Remote Workspace native parser
+```
+
+但无论采用哪种实现，都必须统一返回：
+
+```text
+ParseManifest
+ContentFragment[]
+DerivedAsset[]
+Warnings[]
+Coverage
+```
+
+解析器只负责“从文件中确定性提取能够证明存在的内容”，而不是代表模型进行主观总结。
+
+建议首版优先级：纯文本 / Markdown / JSON / YAML / CSV 与常见代码格式走轻量原生路径；代码结构优先使用 Tree-sitter 类增量 parser；Office/PDF 通过独立 Document Parser Adapter 评估成熟开源转换器；视频/音频使用媒体工具提取 metadata、duration、stream、keyframe/proxy；3D 使用格式 metadata / scene manifest，而不是直接把二进制交给聊天模型。
+
+# 349. Office / PDF：Basic Parse First，复杂版面按需升级
+
+对于 DOCX / PPTX / XLSX / PDF：
+
+```text
+第一目标：
+能搜索标题、正文、表格文本、页码/Sheet/Slide 位置
+
+不是第一目标：
+把每一个文件都做昂贵的 AI Document Understanding
+```
+
+因此 Document Parser Adapter 默认执行 deterministic conversion。如果文件能够可靠抽取正文，就直接进入 FTS。
+
+扫描 PDF、图片型 PDF 或版面复杂到基础 parser 无法可靠恢复时，资源标记为：
+
+```text
+Text Coverage     PARTIAL / NONE
+Visual Coverage   AVAILABLE
+AI Understanding  NOT_ANALYZED
+```
+
+只有用户/Agent 真的需要时，才把相关页渲染成 page image，交给当前已经使用的视觉模型分析。
+
+对于 500 页扫描 PDF，不允许默认一次性视觉分析 500 页。正确流程是先利用目录、页码、已有 metadata、用户提示与逐页/小批探索缩小范围，再发送相关页；如果用户明确要求“为以后全文搜索建立视觉文字索引”，则创建显式、可暂停、可估算成本的 `AnalyzeForSearchJob`，而不是后台偷偷执行。
+
+# 350. Code Ingestion：Symbol First，不让 LLM 预读整个仓库
+
+代码 Workspace 应优先建立：
+
+```text
+path index
+language
+module/package
+symbol
+class/function/type
+import/dependency
+Git status
+revision
+```
+
+代码内容仍然进入普通 FTS，但结构检索优先使用 Symbol / Relation Index。
+
+例如 Agent 要找：
+
+```text
+RuntimeAdapter.startRun
+```
+
+应当先：
+
+```text
+Symbol Index
+→ exact definition
+→ references / callers
+→ neighboring symbols
+```
+
+而不是：
+
+```text
+把整个 repo 发给 LLM
+→ 请它自己找
+```
+
+源文件变化时，如果 parser 支持增量解析，只更新受影响 syntax tree / symbol / chunk。代码 AI 理解仍然在具体 Task 中由当前 Coding Agent / Harness 完成。
+
+# 351. Image / Audio / Video：Metadata-first，AI Understanding 按需发生
+
+图片默认处理：
+
+```text
+EXIF / dimensions / format
+thumbnail
+filename / tags / artifact relations
+```
+
+不会默认调用 Vision Model 给每张图写 caption。
+
+音频默认处理：
+
+```text
+container / codec / duration / channels / sample rate
+existing subtitle / lyric / transcript sidecar if present
+```
+
+不会默认购买 STT 服务，也不会自动完整转录。
+
+视频默认处理：
+
+```text
+container / stream metadata
+duration / resolution / fps
+thumbnail
+bounded keyframes
+proxy when preview needs it
+existing subtitle tracks
+```
+
+不会默认让多模态模型把整部视频看一遍。
+
+因此在没有字幕/转录、也从未执行 AI Understanding 的情况下，Workbench 必须诚实显示：
+
+```text
+Visual Content Search: NOT AVAILABLE YET
+Audio Content Search: NOT AVAILABLE YET
+```
+
+如果当前主模型支持图像、音频或视频输入，Agent 在真实任务中可以按需发送选中的图、帧或片段；如果当前模型不支持，而管理员也没有配置额外服务，则系统应说明该能力当前不可用，而不是为了“功能完整”偷偷增加另一个收费模型。
+
+# 352. 3D / Blender：结构和预览优先，不解析二进制语义
+
+`.blend`、FBX、GLTF/GLB 等资源不能用“普通文档切 chunk”的思路处理。
+
+对于可结构化读取的格式，优先获得：
+
+```text
+scene name
+object names/types
+materials
+textures/dependencies
+mesh statistics
+camera/light metadata
+animation ranges
+external asset refs
+```
+
+如果 Workspace 已绑定 Blender 工作环境，可以通过受控的 Blender background extractor 获取 scene manifest / preview，但只运行 Workbench 自带、版本固定的 extractor；禁止因为“解析文件”而自动运行文件内嵌脚本、driver 或其他不可信代码。
+
+视觉判断例如：
+
+```text
+“灯光是不是太平？”
+“构图哪里不对？”
+```
+
+应当先生成/选择低成本 preview render 或截图，再由当前视觉模型按需理解，而不是把 `.blend` 原始二进制上传给模型。
+
+# 353. Archive / Package：先看 Manifest，不自动解压执行
+
+ZIP / TAR / 7z 等归档文件进入 Workspace 时，默认只读取安全 manifest：
+
+```text
+entry path
+type
+compressed size
+uncompressed size
+count
+```
+
+必须防止：
+
+```text
+zip bomb
+path traversal
+symlink escape
+极深目录
+异常超大 entry
+```
+
+搜索可以命中归档中的文件名/manifest，但完整提取由显式 Extract Job 处理。归档中的 executable、script、macro 不会因 Ingestion 自动运行。
+
+# 354. MaterializationPlan：真正送给云模型的不是“整个文件”，而是最小充分材料
+
+由于主模型运行在云端，Workbench 在每一次把 Workspace 内容交给模型前生成：
+
+```text
+MaterializationPlan
+```
+
+例如：
+
+```text
+Task:
+检查 PDF 中的 Runtime API 定义
+
+Materialization:
+page 21-24 text
+page 23 image
+Contract C-8
+```
+
+而不是：
+
+```text
+upload entire 300MB project
+```
+
+不同 Backend / Model Adapter 可以选择：
+
+```text
+native file attachment
+extracted text
+rendered pages
+selected image
+keyframe batch
+short clip
+structured scene manifest
+```
+
+目标是：
+
+> **Minimum Sufficient Material。**
+
+这样同时降低 Token、Provider 上传量、延迟和数据暴露范围。
+
+# 355. Cloud Exposure Boundary：控制数据外发，但不发明新的 Harness Permission Engine
+
+Cloud Model First 意味着文件内容可能离开本机，因此需要独立的 Data Egress / Provider Policy，但它不是 Runtime Shell Permission 的替代品。
+
+Workbench 可以知道：
+
+```text
+Project allows cloud model usage
+Provider A allowed
+Provider B blocked
+max attachment size
+sensitive path rules
+```
+
+Agent Runtime 的 shell/file/tool 权限仍继续使用 DeepSeek / Codex / Claude Code 等原生机制。
+
+当自动 Mission 需要发送一个大型或受策略约束的资源时，Workbench 先根据 MaterializationPlan 与项目 Data Policy 判断能否发送；若策略允许且在自动化预算范围内则继续，若不允许则产生 Attention，而不是偷偷换 Provider 或绕过规则。
+
+# 356. AI Understanding Cache：花过一次主模型费用，尽量复用，但不把结果当真源
+
+对于已经按需分析过的资源，可以缓存：
+
+```text
+UnderstandingRecord
+
+resourceRef
+sourceRevision
+region
+model/provider
+instructionVersion
+result
+createdAt
+usage/cost
+```
+
+例如 Agent 曾分析：
+
+```text
+video.mp4 00:10:00-00:10:20
+```
+
+下一次同一 SourceRevision、相同用途又需要这段内容时，可以先复用缓存，而不是重复收费。
+
+文件更新后：
+
+```text
+SourceRevision changed
+```
+
+相关 UnderstandingRecord 自动变成 STALE；若只能够确认局部片段未变，可以保留局部缓存，否则宁可重新分析，也不能把旧理解假装成新文件事实。
+
+AI Understanding Cache 可以被 FTS 索引用作“已分析内容的检索提示”，但检索结果必须标记 `AI_DERIVED` 并带源引用。
+
+# 357. Ingestion 不阻塞 Explorer 与 Agent 对话
+
+后台摄取使用有界队列，并按优先级调度：
+
+```text
+当前 Task 明确引用
+      ↓
+用户刚 Attach 的资源
+      ↓
+当前 Explorer 可见/Preview
+      ↓
+当前 Project 活跃资源
+      ↓
+普通后台索引
+```
+
+一个 200GB Workspace 首次打开时，Explorer 仍然应该先显示目录；解析/index job 在后台渐进执行。
+
+Parser、preview、media metadata、keyframe、document conversion 分别有并发和内存上限。任何一个复杂 PDF 或损坏媒体文件都不能拖死整个桌面进程。
+
+# 358. Parse / Understanding Receipts
+
+为保持 Glass Box 的一致性，新增：
+
+```text
+IngestionReceipt
+```
+
+记录：
+
+```text
+resourceRef
+sourceRevision
+parserId / parserVersion
+coverage
+fragmentsGenerated
+derivedAssets
+warnings
+elapsedMs
+bytesRead
+```
+
+以及：
+
+```text
+UnderstandingReceipt
+```
+
+记录：
+
+```text
+Agent / Run / Task
+resourceRef + region
+MaterializationPlan
+backend / model
+whyNeeded
+cacheHit
+usage / cost
+resultRef
+```
+
+以后用户问：
+
+> 为什么 AI 能知道这张图里的内容？
+
+可以看到它在某个 Run 中真正分析过哪一张图、哪几页或哪几秒，而不是让模型事后编一个解释。
+
+# 359. Parser Failure 不等于文件不可用
+
+资源的解析状态与文件本身分离：
+
+```text
+CATALOGED
+PARSED
+PARTIAL
+UNSUPPORTED
+RETRYABLE_ERROR
+FATAL_PARSE_ERROR
+```
+
+例如一个 PDF parser 失败：
+
+```text
+Workspace file       AVAILABLE
+Explorer open        AVAILABLE
+Attach raw file      取决于当前模型能力
+FTS content search   UNAVAILABLE
+```
+
+如果当前模型原生支持 PDF，用户仍然可以直接把它用于当前任务；Parser failure 只表示后台确定性索引能力不足，不应让整个资源“消失”。
+
+# 360. Untrusted Content Isolation
+
+Ingestion 是系统级文件处理路径，因此必须默认把 Workspace 内容视为不可信输入。
+
+Parser Worker 应满足：
+
+```text
+read-only source access
+no macro execution
+no Office script execution
+no repository code execution
+resource / time / memory limits
+bounded child process
+bounded output
+```
+
+对复杂 parser 建议使用独立 worker process，崩溃后由 Parser Host 隔离并重启，而不是与 Tauri 主进程同生共死。
+
+这属于 Workbench 自身文件处理安全边界，不是对 DeepSeek/Codex Runtime Permission 的重新实现，两者职责不同。
+
+# 361. 开源参考：借能力，不把 Workbench 绑成某一个 Parser 项目的外壳
+
+当前值得做 Integration Spike 的参考包括：
+
+```text
+Tree-sitter
+代码增量语法树 / symbol extraction
+
+Microsoft MarkItDown
+多类文档 → Markdown 的轻量转换思路
+
+Apache Tika
+广格式 metadata / text parser 体系
+
+Docling
+复杂 PDF / layout / table 的高级文档解析参考
+
+FFmpeg
+视频/音频 metadata、decode、thumbnail、keyframe/proxy
+
+ExifTool
+跨格式 metadata extraction
+```
+
+但首版不要求把这些项目全部打包进去。特别是 Java/Python/ML-heavy parser 会明显影响 Linux Desktop 安装体积、启动和维护成本，因此应走 `ParserProvider / Integration Registry`，分别做兼容性、资源、许可证、崩溃隔离与打包 Benchmark。
+
+对于高级 Docling 类能力，如果会引入本地模型下载或较重推理依赖，不进入默认部署；只作为未来可选 Advanced Document Pack 评估。
+
+FFmpeg 集成必须单独检查最终 build 的许可证配置；默认 LGPL 与启用 GPL 组件后的发行义务不同，不能简单写成“FFmpeg 是开源所以直接打包”。
+
+# 362. Composer / Workspace UX：用户不需要学习“Ingestion”这个工程概念
+
+用户通过 Composer：
+
+```text
++
+选择文件 / Workspace Resource
+```
+
+看到的只应该是轻量状态，例如：
+
+```text
+report.pdf
+Text ✓  ·  128 pages
+```
+
+或：
+
+```text
+scan.pdf
+Text unavailable · Visual analysis on demand
+```
+
+视频可能显示：
+
+```text
+demo.mp4
+12:42 · Subtitle ✓ · Visual not analyzed
+```
+
+当用户直接问：
+
+```text
+“帮我看 12 分钟附近为什么画面卡住。”
+```
+
+Agent 自动创建对应 MaterializationPlan 并处理。
+
+高级用户可以在 Resource Details / Glass Box 看到完整 Coverage、Parser、Cache、Receipt；普通用户不需要知道底层是 MarkItDown、Tree-sitter 还是 FFmpeg。
+
+# 363. v0.34 Decision Log
+
+## D-353 — Zero-AI Ingestion Baseline
+
+**决定：** Workspace 摄取与基础可搜索能力默认不得调用 Vision/OCR/STT/Embedding/Reranker 等额外模型；Catalog、deterministic parse、metadata、FTS、symbol 与 preview 能在零额外 AI 服务下运行。  
+**状态：** Accepted
+
+## D-354 — AI Understanding Is On Demand
+
+**决定：** 图片、扫描 PDF、音频、视频、复杂版面与 3D 视觉判断只在真实用户请求 / Agent Task / Mission 需要时使用当前已经配置的主模型进行理解；禁止默认批量 AI 分析整个 Workspace。  
+**状态：** Accepted
+
+## D-355 — Original Resource Remains Truth
+
+**决定：** Workspace 原始文件 / Provider revision 是内容真源；Parse/Preview/Understanding 均为可重建 Projection。模型生成的 UnderstandingRecord 默认只能作为检索提示与任务证据，不能自动成为项目共同事实。  
+**状态：** Accepted
+
+## D-356 — IndexCoverage Is Multi-Dimensional
+
+**决定：** 资源不使用单一 `indexed` 布尔值，而是分别记录 Metadata/Text/Structure/Preview/Visual/Audio 等 coverage；`NOT_ANALYZED` 是正常状态，不等于错误。  
+**状态：** Accepted
+
+## D-357 — ParserHost / ParserProvider
+
+**决定：** 文件解析使用可替换 ParserProvider；Workbench Core 统一管理生命周期、隔离、缓存与结构化输出，但不把几十种格式硬编码到 UI 或 Agent Runtime。  
+**状态：** Accepted
+
+## D-358 — Minimum Sufficient Materialization
+
+**决定：** 向云模型发送 Workspace 内容前先生成 MaterializationPlan，只发送完成当前 Task 所需的最小充分页、段、图、帧、片段或结构化 manifest，禁止默认上传整个大型 Workspace / 媒体文件。  
+**状态：** Accepted
+
+## D-359 — No Mandatory OCR/STT Service
+
+**决定：** OCR/STT 不作为首版必需付费服务。扫描 PDF / 图片文字 / 音频内容在未分析时可以只有 metadata/preview coverage；若当前主模型支持相应多模态则按需使用，否则明确说明能力当前不可用。  
+**状态：** Accepted
+
+## D-360 — Understanding Cache Is Revision-bound
+
+**决定：** 主模型已经产生的文件理解可以缓存以避免重复费用，但必须绑定 SourceRevision + Region + Model/Instruction Version；源发生变化后相关缓存自动失效或标记 Stale。  
+**状态：** Accepted
+
+## D-361 — Code Uses Symbol-first Retrieval
+
+**决定：** 代码摄取优先构建 Path/Symbol/Import/Dependency/Revision 投影；LLM 负责具体任务的代码理解，而不是通过预先让模型“读完整个仓库”建立索引。  
+**状态：** Accepted
+
+## D-362 — Media Uses Metadata / Preview First
+
+**决定：** 图片、音频、视频默认只生成 metadata、thumbnail/keyframe/proxy 与已有 subtitle/transcript 的确定性索引；Visual/Audio semantic understanding 按需执行。  
+**状态：** Accepted
+
+## D-363 — Archive Never Auto-executes Content
+
+**决定：** 归档默认只读取受限 Manifest，并实施 zip-bomb/path-traversal/symlink/depth/size 防护；解压是显式 Job，摄取路径永不执行归档中的脚本或程序。  
+**状态：** Accepted
+
+## D-364 — Parser Failure Does Not Hide Resource
+
+**决定：** Parser/Index 失败与 Workspace 文件可用性分离。文件仍可浏览、传输，并在当前模型支持原生附件时直接用于任务；仅对应 Search Coverage 降低。  
+**状态：** Accepted
+
+## D-365 — Parser Workers Are Isolated
+
+**决定：** 复杂第三方文档/媒体 parser 采用受控 worker / sidecar 隔离，限制文件访问、执行、CPU、内存、时间和输出；Ingestion 不能运行 Office Macro、Repo Code 或文件内嵌脚本。  
+**状态：** Accepted
+
+## D-366 — Heavy Document AI Is Optional
+
+**决定：** Docling 类高级文档解析若引入本地模型或重型依赖，只能作为 Optional Advanced Document Pack；默认桌面部署不因高级 PDF 能力增加本地模型服务器或额外付费模型。  
+**状态：** Accepted
+
+## D-367 — Ingestion Is Progressive and Priority-aware
+
+**决定：** 摄取与索引按当前 Task/Attachment/Visible Preview/Active Project/Background 顺序调度，使用有界队列和增量更新；大型 Workspace 的后台解析不得阻塞 Explorer 首屏、Composer 或 Agent Runtime。  
+**状态：** Accepted
+
+
+# 364. Multi-Backend 的真正难点不是“能不能启动 CLI”，而是 Capability Contract
+
+当同一个 Agent Instance 可以在多个 Execution Backend 之间切换后，Workbench 不能只维护：
+
+```text
+backend = codex / claude / opencode / deepseek
+```
+
+真正需要维护的是一个可探测、版本化的 `BackendCapabilityDescriptor`。至少覆盖：
+
+```text
+Session
+  create / resume / fork
+  persistent / ephemeral
+  background
+  steer / queue / interrupt
+
+Input
+  text
+  local image
+  inline image
+  native file / PDF
+  local path reference
+  structured input
+
+Workspace
+  cwd binding
+  extra roots
+  read / edit / patch
+  git awareness
+  diff stream
+
+Execution
+  shell / terminal
+  file edit
+  tool / MCP
+  skills / plugins
+  subagents
+
+Control
+  native approvals
+  permission mode
+  model selection
+  effort / reasoning level
+  budget controls
+
+Observability
+  token / cost usage
+  item/tool events
+  plan events
+  diff events
+  background task state
+
+Output
+  streaming text
+  structured JSON
+  artifact / file refs
+  review findings
+```
+
+这个矩阵不是产品文档中的静态表格，而是运行时真实能力的 Projection。
+
+# 365. Effective Capability = Backend ∩ Model ∩ Session ∩ Workspace ∩ Policy
+
+某个 Backend “支持图片”不代表当前 Turn 一定可以使用图片。
+
+真正有效能力必须由以下交集计算：
+
+```text
+Backend Capability
+        ∩
+Selected Model Capability
+        ∩
+Current Session Mode
+        ∩
+ExecutionWorkspaceBinding
+        ∩
+Project Data-Egress / Admin Policy
+        =
+Effective Capability
+```
+
+例如：
+
+```text
+Backend: 支持 image input
+Model: text-only
+```
+
+则最终：
+
+```text
+image understanding = UNSUPPORTED
+```
+
+又例如：
+
+```text
+Model: vision capable
+Backend: 只能接收 local path
+Workspace: remote-only, 当前没有本地 mirror
+```
+
+则可能：
+
+```text
+image input = ADAPTED / NEEDS_STAGING
+```
+
+所以 Capability Router 永远针对 `Execution Candidate = Backend + Model + Binding`，而不是只看 Backend 名字。
+
+# 366. Integration Grade 只做摘要，真正路由仍看逐项 Capability
+
+Workbench 可以给 Backend 一个便于 UI/运维理解的集成等级，但不能把等级当做硬编码能力：
+
+```text
+G3 NATIVE_CONTROL
+官方/稳定的双向 App Server / SDK / Runtime API
+
+G2 STRUCTURED_PROTOCOL
+ACP、稳定 Server API、SDK 等结构化外部 Harness
+
+G1 STRUCTURED_CLI
+JSON/JSONL streaming、session id、可恢复/中断等部分控制
+
+G0 TEXT_FALLBACK
+stdin/stdout 文本式一次性 CLI
+```
+
+原则：
+
+```text
+Native rich path > Structured protocol > Structured CLI > Text fallback
+```
+
+但实际每个 Task 仍然按具体能力硬过滤。
+
+不能出现：
+
+```text
+“G2 所以一定能 Diff”
+“G3 所以一定能图片”
+```
+
+这种错误推断。
+
+# 367. 不把所有 Harness 强行压到 ACP：避免 Lowest Common Denominator
+
+> **v0.35.1 Scope Correction：** 本节及其后的 Claude Code / OpenCode / ACP Adapter 设计仅适用于 Room/Mission External Worker 与未来 Integration Spike；不再意味着它们可以成为 Direct Agent Chat 的主 Runtime。Direct Agent Runtime 仍严格限定为 DeepSeek Harness / Codex Harness。
+
+
+ACP 很适合成为外部 coding harness 的共享接入路径，但不应成为 Workbench 唯一 Runtime API。
+
+架构应保持：
+
+```text
+RuntimeAdapter
+   ├── DeepSeek Native Adapter
+   ├── Codex Native Adapter
+   ├── Claude Code Adapter
+   ├── OpenCode Native/Server Adapter
+   ├── ACP Adapter
+   └── Structured CLI Adapter
+```
+
+当某个 Runtime 有更丰富的 native API 时，优先使用 native path。
+
+例如某个 native path 能给：
+
+```text
+aggregated diff
+native approval requests
+turn steer
+precise token usage
+structured tool events
+```
+
+就不应该为了接口统一而故意丢掉这些能力。
+
+ACP 的价值是减少新增 Harness 的接入成本，而不是让所有 Harness 降级到同一个最低能力面。
+
+# 368. BackendCapabilityProbe：Runtime 更新后必须重新发现，而不是相信旧配置
+
+CLI/Harness 的能力会随着版本升级变化，因此 Adapter 在安装、升级、启动和异常恢复时需要执行：
+
+```text
+probe()
+  ↓
+version
+protocol version
+schema / API version
+capabilities
+input contracts
+control contracts
+health
+```
+
+结果写入：
+
+```text
+RuntimeCapabilitySnapshot
+```
+
+并带：
+
+```text
+backendVersion
+adapterVersion
+probedAt
+capabilityHash
+```
+
+如果升级后能力减少：
+
+```text
+READY
+  ↓
+DEGRADED / INCOMPATIBLE
+```
+
+Workbench 不能继续假装旧能力仍然存在。
+
+对能够导出 machine-readable schema 的 Runtime，优先从当前安装版本生成/读取 schema；对 Server/OpenAPI 型 Runtime，优先基于其当前协议描述；对纯 CLI 才退到 `--help/version + Adapter Known Profile + runtime smoke test`。
+
+# 369. Composer 的“+ 文件”必须生成 ResourceIntent，而不是直接绑定某个 Runtime 文件参数
+
+用户在 Composer 中：
+
+```text
++
+选择 design.png
+```
+
+Workbench 首先生成的是稳定语义：
+
+```text
+ResourceIntent
+
+resourceRef
+sourceRevision
+intent = ANALYZE
+region = optional
+userExplicit = true
+```
+
+而不是：
+
+```text
+codex.localImage=/tmp/design.png
+```
+
+因为用户在发送前可能从：
+
+```text
+Auto → Codex → Claude Code → OpenCode
+```
+
+切换 Backend。
+
+Runtime-specific payload 必须到真正 `startRun()` 前才由 `InputMaterializationResolver` 生成。
+
+# 370. AttachmentBinding 是可重新物化的，不绑定临时路径
+
+Conversation / Work / Handoff 中保存：
+
+```text
+ResourceRef + Revision + Region + Intent
+```
+
+而不是永久保存：
+
+```text
+/tmp/workbench-12938/page-4.png
+```
+
+真正执行时：
+
+```text
+ResourceIntent
+      ↓
+Effective Capability
+      ↓
+MaterializationPlan
+      ↓
+Runtime-specific InputBinding
+```
+
+所以同一个 Attachment 可以在下一轮换 Runtime 后重新 materialize。
+
+临时路径、inline data、remote upload id、provider file id 都只是一次 Binding，不是资源身份。
+
+# 371. InputMaterializationResolver：同一资源按 Backend 能力选择不同交付形式
+
+统一支持以下 Materialization Mode：
+
+```text
+DIRECT_PATH
+LOCAL_STAGED_PATH
+INLINE_TEXT
+INLINE_IMAGE
+NATIVE_FILE
+EXTRACTED_TEXT
+RENDERED_PAGES
+KEYFRAMES
+SHORT_MEDIA_CLIP
+SCENE_MANIFEST
+PREVIEW_RENDER
+TOOL_MEDIATED
+UNSUPPORTED
+```
+
+示例：同一个 `report.pdf`：
+
+```text
+Candidate A
+原生 PDF input
+→ NATIVE_FILE
+
+Candidate B
+Vision + image only
+→ EXTRACTED_TEXT + selected RENDERED_PAGES
+
+Candidate C
+Text only
+→ EXTRACTED_TEXT
+
+Candidate D
+Parser 无文本、又无 vision/file capability
+→ UNSUPPORTED
+```
+
+Workbench 的目标不是“无论什么 Backend 都硬塞进去”，而是寻找最小充分且真实兼容的表示。
+
+# 372. 必须区分 Resource Understanding Capability 与 Resource Operation Capability
+
+这是多 Backend 文件能力中最容易混淆的一点。
+
+例如：
+
+```text
+scene.blend
+```
+
+某个 Coding Harness 可能：
+
+```text
+能够通过 shell / Blender CLI 修改它
+```
+
+但并不代表模型：
+
+```text
+原生理解 .blend 二进制语义
+```
+
+所以资源能力至少拆成：
+
+```text
+UNDERSTAND
+OPERATE
+PREVIEW
+TRANSFORM
+```
+例如 3D：
+
+```text
+UNDERSTAND
+  manifest + preview render = ADAPTED
+
+OPERATE
+  Blender installed + Harness shell access = AVAILABLE
+```
+
+视频同理：一个 Agent 可以用 FFmpeg 裁剪视频，但不一定能直接理解三小时视频的视觉语义。
+
+# 373. 文件类型的默认交付策略
+
+首版推荐：
+
+```text
+Text / Markdown / Source Code
+  优先 DIRECT_PATH / TOOL_MEDIATED
+  需要跨边界时才 INLINE_TEXT / selected excerpts
+
+Image
+  优先 native local/inline image
+  不支持 image 时只保留 metadata，不假装理解
+
+Normal PDF
+  extracted text first
+  必要页再 render
+  native PDF capability 存在时可直接使用
+
+Scanned PDF
+  selected pages → image-capable current model
+  无 vision 时明确 unsupported
+
+Audio / Video
+  existing subtitle/transcript
+  metadata / keyframes
+  task-specific short segment
+  不默认上传整段大型媒体
+
+3D / Blender
+  scene manifest + dependency metadata + preview render
+  原文件主要作为操作对象而不是语言模型输入
+
+Archive
+  manifest only by default
+```
+
+该策略继承 v0.34 的 `Minimum Sufficient Materialization`，不因新增多个 Backend 而扩大默认上传范围。
+
+# 374. ExecutionWorkspace Staging：Remote Workspace 不等于所有本地 CLI 都看得到
+
+`ExecutionWorkspaceBinding` 需要明确 Runtime 实际看到哪一种 Workspace 表示：
+
+```text
+DIRECT_PATH
+MIRRORED_PATH
+READ_ONLY_STAGE
+TASK_SCOPED_STAGE
+TOOL_PROXY
+REMOTE_NATIVE
+UNAVAILABLE
+```
+
+例如：
+
+```text
+Workspace = SFTP Remote
+Backend = local CLI
+```
+
+如果没有 mirror：
+
+```text
+/path/to/remote/file
+```
+
+并不存在于 CLI 所在机器。
+
+Workbench 可以根据 Workspace Provider 创建：
+
+```text
+Task-scoped local stage
+```
+
+或者通过 Tool Gateway 提供受控资源读取；但 Runtime 最终能不能访问/修改这些路径，继续由它自己的 native permission / sandbox 决定。
+
+Workbench 的 staging 不能成为绕过 Harness 权限的方法。
+
+# 375. Backend Auto-switch 必须在发送前做 Attachment Compatibility Preflight
+
+如果 Composer 当前已有：
+
+```text
+design.png
+report.pdf
+scene.blend
+```
+
+用户选择：
+
+```text
+Auto
+```
+
+Router 必须把这些 `Required Resource Capabilities` 纳入 hard filter。
+
+例如候选 Backend B 无法完成必要的视觉理解：
+
+```text
+Candidate B
+REJECTED
+reason = REQUIRED_IMAGE_UNSUPPORTED
+```
+
+如果用户手动 Pin Backend B，则不能静默换走，应提示：
+
+```text
+当前 Backend 无法完成 design.png 的视觉分析。
+
+可选：
+[改用兼容 Backend/Model]
+[仅保存附件，不发送]
+[移除附件]
+[继续，但不使用该资源]
+```
+
+这延续此前“手动选择必须被尊重”的原则。
+
+# 376. Multi-Agent Handoff 传 ResourceRef，不传重复文件副本
+
+Architect → Coding → Reviewer 的 Handoff：
+
+```text
+resourceRefs:
+  ref://workspace/W1/router.rs
+  ref://artifact/A72
+  ref://workspace/W1/design.png
+```
+
+而不是把每一个文件重新序列化进 Handoff payload。
+
+每个接收 Agent 根据自己的 Backend/Model：
+
+```text
+ResourceRef
+   ↓
+自己的 MaterializationPlan
+```
+
+这样同一个 Mission 中：
+
+```text
+Codex
+Claude Code
+OpenCode
+DeepSeek
+```
+
+可以使用不同输入表示，但仍然引用同一个 Workspace truth。
+
+# 377. 多 Agent 成本策略：Analyze Once, Share Structured Result；需要独立验证时才重复看原始材料
+
+同一个 500 页 PDF 如果广播给 8 个 Agent，虽然没有 Embedding 成本，仍然可能产生巨大的主模型 Context 费用。
+
+默认 Mission Planner 应优先：
+
+```text
+Research Agent
+读取必要原始材料
+      ↓
+产生 Artifact / Knowledge / Evidence Refs
+      ↓
+其他 Agent 使用结构化结果
+```
+
+只有在以下情况才让多个 Agent 独立读取同一原始材料：
+
+```text
+Independent Review
+High-risk verification
+Deliberate panel comparison
+User explicitly requests independent analysis
+```
+
+也就是：
+
+> 原材料读取可以共享结论，但独立性本身是有成本的能力。
+
+# 378. Materialization Budget 必须成为 Context Budget 的一部分
+
+每个 Agent Turn 在真正发送前应计算：
+
+```text
+max text tokens
+max file bytes
+max image count
+max rendered pages
+max keyframes
+max media seconds
+```
+
+例如：
+
+```text
+Task
+Review report.pdf
+
+Plan
+Text pages 1-12
+Rendered pages 7, 9
+2 images
+```
+
+如果超过预算，优先：
+
+```text
+narrow region
+summarize deterministic text
+read iteratively
+ask current model to request next chunk
+```
+
+而不是一次性放大 Context。
+
+# 379. MaterializationReceipt：最终到底给 Runtime 了什么必须可追踪
+
+每次 Run 生成：
+
+```text
+MaterializationReceipt
+```
+
+至少记录：
+
+```text
+agentId
+runId / taskId
+resourceRef + sourceRevision
+intent / requested region
+backend + model
+Effective Capability
+materialization mode
+selected regions/pages/frames
+materialized bytes / estimated tokens
+cache hit
+staging mode
+policy result
+failure / downgrade reason
+```
+
+Glass Box 中可以回答：
+
+> 为什么这个 Agent 只看了 PDF 第 7、9 页？
+
+> 为什么这次图片没有进入 Claude/Codex？
+
+> 为什么 Backend 自动候选被排除了？
+
+同时避免展示不必要的临时 secret/path 细节。
+
+# 380. Data Egress：Workbench 可以控制“选择与物化”，但不能假装完全代理 Harness 的所有网络字节
+
+云模型优先架构下，Workbench 必须知道：
+
+```text
+Provider 是否允许用于当前 Project
+某 Resource 是否允许发送到该 Provider
+是否允许 raw file / derived text / image preview
+```
+
+在 `Execution Candidate` 与 Materialization 阶段执行 Data Egress Policy。
+
+但当一个外部 Harness 自己拥有文件读取工具与网络能力时，Workbench 不能虚假宣称自己能拦截 Runtime 内部所有数据流；真正文件访问权限仍由 Harness native permission/sandbox 管理。
+
+因此产品文案必须区分：
+
+```text
+Workbench-selected materialization / provider policy
+```
+
+与：
+
+```text
+Runtime-native file/network permission
+```
+
+# 381. 开源 / 官方实现参考：不同项目证明“能力探测 + 多接入路径”比统一 CLI 更合理
+
+当前 Integration Spike 可重点研究：
+
+```text
+Codex app-server
+  rich bidirectional protocol
+  thread / turn / item lifecycle
+  steer / interrupt
+  approval request
+  diff / usage / structured events
+  image/local-image input
+
+OpenCode Server / SDK
+  server-first architecture
+  OpenAPI
+  event stream
+  programmatic session control
+
+Claude Code CLI / Agent SDK
+  resumable sessions
+  stream-json
+  model / permission / budget controls
+  background sessions
+  structured scripted mode
+
+OpenClaw ACP / ACPX
+  external harness shared protocol path
+  persistent/bound sessions
+  steer/cancel/model/permission controls
+  demonstrates native Codex path and ACP path can coexist
+```
+
+Workbench 借鉴的是：
+
+> 动态协议能力、会话控制、结构化事件和 shared adapter lane。
+
+而不是把产品核心实现直接绑定给任何一个项目。
+
+# 382. 首版 Integration 顺序建议
+
+为了控制工程量，建议：
+
+```text
+Phase A
+DeepSeek Native Adapter
+Codex Native Adapter
+统一 CapabilityDescriptor + MaterializationResolver
+
+Phase B
+Claude Code Structured Adapter
+OpenCode Server/SDK Adapter
+
+Phase C
+ACP Adapter
+让更多兼容 Harness 以较低接入成本进入
+
+Phase D
+Generic Structured CLI Adapter
+只用于能力有限但用户仍希望接入的 CLI
+```
+
+第一版不要同时追求十几个 Harness 的“名字支持”。
+
+真正的验收指标应该是：
+
+```text
+同一个 Agent
+同一个 ResourceRef
+在 3~4 个不同 Backend 上
+能够得到正确兼容性判断、正确物化、可恢复 session、可解释 trace
+```
+
+而不是 Runtime 列表有多长。
+
+# 383. v0.35 Decision Log
+
+## D-368 — Capability Is Probed, Not Assumed
+
+**决定：** 每个 RuntimeAdapter 必须产生版本化 BackendCapabilityDescriptor / RuntimeCapabilitySnapshot；升级、安装、启动与异常恢复后重新 probe。UI 和 Router 不按 Backend 名称硬编码能力。  
+**状态：** Accepted
+
+## D-369 — Effective Capability Is an Intersection
+
+**决定：** 有效能力由 Backend、Model、Session Mode、ExecutionWorkspaceBinding 与当前 Policy 共同决定；Capability UI 继续使用 Native / Adapted / Unsupported 语义并说明适配方式。  
+**状态：** Accepted
+
+## D-370 — Native Rich Adapter First
+
+**决定：** 存在稳定丰富 native App Server/SDK 时优先原生 Adapter；ACP/Structured Protocol 是共享扩展路径，不强制所有 Runtime 走 ACP，也不牺牲 native diff/approval/usage/steer 等能力。  
+**状态：** Accepted
+
+## D-371 — Composer Attachment Stores ResourceIntent
+
+**决定：** Composer、Conversation、Handoff 保存稳定 ResourceRef + Revision + Region + Intent，不保存 Runtime-specific 临时路径/Upload ID 作为长期身份；发送前再生成 InputBinding。  
+**状态：** Accepted
+
+## D-372 — Runtime-specific Input Materialization
+
+**决定：** 同一个 ResourceIntent 按 Effective Capability 转为 Direct Path、Staged Path、Inline Text/Image、Native File、Extracted Text、Rendered Page、Keyframe、Scene Manifest、Tool-mediated 等最小充分表示。  
+**状态：** Accepted
+
+## D-373 — Understand and Operate Are Separate Capabilities
+
+**决定：** 对资源的语义理解能力与文件操作能力分开建模；能通过 CLI/Blender/FFmpeg 操作文件不代表模型原生理解该格式。  
+**状态：** Accepted
+
+## D-374 — Remote Workspace Requires Explicit Staging Semantics
+
+**决定：** Runtime 实际 Workspace Binding 明确区分 Direct/Mirrored/Read-only Stage/Task Stage/Tool Proxy/Remote Native；Workbench staging 不绕过 Harness 原生 sandbox/permission。  
+**状态：** Accepted
+
+## D-375 — Attachment Compatibility Is a Routing Hard Filter
+
+**决定：** Auto Backend/Model Router 在启动 Run 前必须把显式附件与 Task Resource Requirements 加入 hard filter；用户手动 Pin 不兼容 Backend 时阻塞静默发送并给出明确选项，不静默换底座。  
+**状态：** Accepted
+
+## D-376 — Handoff Uses References, Not File Duplication
+
+**决定：** Agent/Runtime 间 Handoff 传稳定 ResourceRef 与语义提示，由接收 Agent 独立物化；不在 Room/Task/Handoff 中复制大型文件 payload。  
+**状态：** Accepted
+
+## D-377 — Analyze Once by Default
+
+**决定：** 多 Agent Mission 默认优先由一个负责 Agent 分析昂贵原始材料并发布 Artifact/Knowledge/Evidence，其他 Agent消费结构化结果；只有独立 Review/验证/Panel 或用户要求时才重复读取原材料。  
+**状态：** Accepted
+
+## D-378 — Materialization Has a Budget
+
+**决定：** 文件/页面/图片/帧/媒体片段物化必须计入 Turn Context Budget；超过预算采用缩小区域、迭代读取、按需追加，而不是一次性扩大附件上下文。  
+**状态：** Accepted
+
+## D-379 — MaterializationReceipt Is Mandatory for Resource-bearing Runs
+
+**决定：** 使用 Workspace/Attachment 资源的 Run 产生 MaterializationReceipt，记录真实 resource revision、Backend/Model、物化模式、范围、大小、缓存与降级原因，供 Glass Box 与调试使用。  
+**状态：** Accepted
+
+## D-380 — Data-Egress Policy Is Not Runtime Permission
+
+**决定：** Workbench 在 Candidate/Materialization 层控制允许选择哪些 Cloud Provider 以及哪些 Resource/Derived Content 可以发送；外部 Harness 自身的文件/网络访问仍由其 native permission/sandbox 负责，Workbench 不宣称代理全部 Runtime 网络流量。  
+**状态：** Accepted
+
+## D-381 — Capability Drift Must Be Visible
+
+**决定：** Runtime 升级造成 schema/capability 变化时比较 CapabilitySnapshot；破坏现有任务要求则标记 DEGRADED/INCOMPATIBLE 并阻止错误自动路由，不能沿用旧缓存假装兼容。  
+**状态：** Accepted
+
+## D-382 — Integration Grade Is Informational Only
+
+**决定：** G3/G2/G1/G0 只用于 UI/运维概览，Task Router 仍使用逐项 capability；不得根据“高级集成等级”推断模型、文件或权限能力。  
+**状态：** Accepted
+
+## D-383 — First Release Optimizes Depth, Not Backend Count
+
+**决定：** 首版优先跑通 DeepSeek/Codex + 1~2 个结构化外部 Backend 的完整 Resource/Session/Approval/Trace 路径，再扩展 ACP/Generic CLI；不以支持 CLI 名称数量作为完成度。  
+**状态：** Superseded by D-391（Direct Agent 首版只验收 DeepSeek/Codex；外部 Worker 单独分阶段）
+
+## D-384 — Same Resource, Different Backend, Same Truth
+
+**决定：** 一个 Workspace Resource 可以针对不同 Backend 生成不同 InputBinding，但所有 Binding 必须回指同一个 ResourceRef + SourceRevision；Runtime 切换不得产生附件身份分叉或不可追溯副本。  
+**状态：** Accepted
+
+
+---
+
+# 384. v0.35.1 核心边界修正：Workbench Agent 只以 DeepSeek Harness / Codex Harness 为核心 Runtime
+
+这一修正解决前一版把“Agent 身份”“Harness-native 子代理”“Room 中的外部 CLI Worker”混在一起的问题。
+
+正式拆成三个执行域：
+
+```text
+A. Direct Agent Domain
+   Persistent Workbench Agent
+   → DeepSeek Harness / Codex Harness only
+
+B. Harness-Native Subagent Domain
+   Direct Agent 开启并行/多任务
+   → 当前 DeepSeek/Codex Harness 自带 subagent / worker
+
+C. Room / Mission External Worker Domain
+   Agent Room / AUTO TEAM 中的任务执行辅助
+   → 可选 Claude Code / OpenCode / OpenClaw / ACP / 其他 CLI Worker
+```
+
+这三个对象不能再统一叫“Agent Runtime”。
+
+## 384.1 Direct Agent Domain
+
+用户在 Agent Library 打开的长期 Agent，例如：
+
+```text
+My Agent
+Architect Agent
+Coding Agent
+Video Agent
+```
+
+其每一个**可见 Agent Turn**只允许：
+
+```text
+AUTO
+DEEPSEEK
+CODEX
+HYBRID
+```
+
+其中：
+
+```text
+AUTO   = 在 DeepSeek Harness / Codex Harness 中选择
+HYBRID = 只允许 DeepSeek Harness ↔ Codex Harness 的结构化协作
+```
+
+不允许 Direct Agent Chat 直接把：
+
+```text
+Claude Code
+OpenCode
+OpenClaw
+Generic CLI
+```
+
+绑定为这个 Agent 的主 Runtime。
+
+因此 Agent 的核心策略正式恢复为：
+
+```text
+CoreHarnessPolicy
+
+AUTO
+DEEPSEEK
+CODEX
+HYBRID
+```
+
+而不是泛化的 `ExecutionBackendPolicy`。
+
+Agent Identity / Private MemorySpace 仍然与当前是 DeepSeek 还是 Codex 分离；但**允许的核心 Runtime 集合是固定双 Harness**。
+
+---
+
+# 385. Direct Agent 的多任务并行：使用 Harness-native Subagent，而不是创建外部 Workbench Agent
+
+用户在单个 Agent 聊天中说：
+
+```text
+把这三个任务并行做掉。
+```
+
+如果当前 Run 在 DeepSeek Harness：
+
+```text
+Parent Workbench Agent
+        ↓
+DeepSeek Harness
+        ↓
+Native Subagent / Worker A
+Native Subagent / Worker B
+Native Subagent / Worker C
+```
+
+如果当前 Run 在 Codex Harness：
+
+```text
+Parent Workbench Agent
+        ↓
+Codex Harness
+        ↓
+Native Subagent / Worker A
+Native Subagent / Worker B
+```
+
+Workbench 的职责是：
+
+```text
+Task projection
+Event projection
+Progress visualization
+Cost/usage aggregation
+Workspace change attribution
+```
+
+但不把这些 Harness 内部 worker 自动升级成：
+
+```text
+AgentInstance
+Private MemorySpace
+Agent Library entry
+Room Member
+```
+
+建议统一称为：
+
+```text
+HarnessWorkerRef
+```
+
+而不是 `agent_id`。
+
+它至少包含：
+
+```text
+parentAgentId
+parentRunId
+runtimeBindingId
+nativeWorkerId
+assignedTaskId
+status
+capabilitySnapshot
+```
+
+## 385.1 Memory 边界
+
+Mandatory Agent Memory Turn Lifecycle 适用于**Workbench Agent 的可见 Turn**。
+
+Harness 内部 subagent 是该 Run 的临时执行结构：
+
+```text
+不自动创建独立长期 MemorySpace
+不跨 Agent 读取 Private Memory
+不在任务结束后自动成为长期 Agent
+```
+
+父 Agent 根据 Runtime native 机制给它最小 Task Context。
+
+如果未来用户确实希望把某个临时 worker 培养成长期 Agent，应走正式：
+
+```text
+Create / Promote Agent Instance
+→ new agent_id
+→ new private MemorySpace
+```
+
+不能直接把 Harness 内部 worker id 当成长期 Agent Identity。
+
+## 385.2 如果当前 Harness 没有 native parallel worker capability
+
+正确降级是：
+
+```text
+Sequential
+或
+在用户允许时使用 DeepSeek/Codex Hybrid
+```
+
+而不是在 Direct Agent Chat 中偷偷启动 Claude Code / OpenCode 来模拟“子代理”。
+
+---
+
+# 386. Agent Room / Mission 才是外部 CLI/Harness 的扩展边界
+
+Room 中的顶层参与者仍然优先是正式 Workbench Agent：
+
+```text
+Architect Agent
+Coding Agent
+Reviewer Agent
+```
+
+每个正式 Agent 自己的核心对话/协调 Turn 依旧：
+
+```text
+DeepSeek Harness / Codex Harness only
+```
+
+但 Room Mission 中，一个 Agent 为完成具体 Task 可以请求一个：
+
+```text
+ExternalExecutionWorker
+```
+
+例如：
+
+```text
+Coding Agent
+Core Harness = Codex
+        │
+        ├── Task T21
+        │    └── OpenCode Worker
+        │
+        └── Task T22
+             └── Claude Code Worker
+```
+
+或者 Lead 根据 Capability Gap 提出：
+
+```text
+room.request_worker(
+  capability = "external coding harness",
+  backend = "opencode",
+  task = T21
+)
+```
+
+这些 Worker：
+
+```text
+✓ 可以有 Session / Resume / Tool Event / Workspace Binding
+✓ 可以产生 ChangeSet / Artifact / Review Evidence
+✓ 可以显示在 Mission Canvas
+
+✕ 默认不是 Workbench Agent Instance
+✕ 默认没有独立 Private MemorySpace
+✕ 不出现在 Agent Library
+✕ 不应绕过 Owner/Lead Agent 直接形成无限 Room 对话
+```
+
+Mission Canvas 需要在视觉上明确区分：
+
+```text
+[Agent] Coding Agent
+   └─ [Worker] OpenCode · T21 · RUNNING
+```
+
+而不是把二者画成同一种头像节点。
+
+这也让之前对 Claude Code / OpenCode / OpenClaw / ACP 的 Adapter 研究继续有价值，但它们归属：
+
+```text
+RoomExecutionWorkerAdapter
+```
+
+而不是：
+
+```text
+CoreAgentRuntimeAdapter
+```
+
+---
+
+# 387. AUTO TEAM 的组队对象与执行 Worker 再分一层
+
+AUTO TEAM 需要先解决：
+
+```text
+WHO SHOULD OWN THE TASK?
+```
+
+也就是选择：
+
+```text
+Workbench Agent Instance
+```
+
+然后才决定：
+
+```text
+HOW SHOULD THIS AGENT EXECUTE THE TASK?
+```
+
+默认：
+
+```text
+Agent Core Harness
+→ DeepSeek / Codex
+```
+
+Room Mission 策略允许时，Agent 才可以进一步提出：
+
+```text
+ExternalExecutionWorker
+```
+
+因此新的分配链是：
+
+```text
+Mission Planner
+      ↓
+Task → Workbench Agent
+      ↓
+Core Harness = DeepSeek / Codex
+      ↓
+Optional Room Worker
+      ↓
+Claude Code / OpenCode / ACP ...
+```
+
+这样不会再出现：
+
+```text
+“Claude Code 是一个 Agent？”
+“OpenCode 是否拥有私人 Memory？”
+“Agent 从 Codex 切到 OpenClaw 后还是不是同一个人？”
+```
+
+这种产品语义混乱。
+
+---
+
+# 388. Runtime / Worker Capability Matrix 拆成两张表
+
+原 v0.35 的 Capability Probe / Materialization 仍然保留，但分域：
+
+```text
+CoreHarnessCapability
+  DeepSeek Harness
+  Codex Harness
+
+RoomWorkerCapability
+  Claude Code
+  OpenCode
+  OpenClaw / ACP
+  future worker backends
+```
+
+Direct Agent Router 只读取：
+
+```text
+CoreHarnessCapability
+```
+
+Room Worker Resolver 才读取：
+
+```text
+RoomWorkerCapability
+```
+
+同一个 ResourceIntent / ResourceRef 仍可为不同 Worker 生成不同 MaterializationPlan，这一部分 v0.35 设计不变。
+
+---
+
+# 389. Skill Studio 新增 Visual Explain：先“看懂 Skill”，再决定是否启用
+
+用户提供的视频材料强调了一个很实际的问题：大型 Skill 的完整文本很难快速读完，因此用流程化、分类化图片帮助理解 Skill，会明显降低认知负担；视频还提出“7~10 个 Skill 较好、且与模型能力有关”的经验性说法。这里借鉴的是**减少同时暴露给 Agent 的 Skill 与把 Skill 可视化解释清楚**，不把 7~10 写成硬性产品上限。
+
+Workbench Skill Studio 新增：
+
+```text
+[Visual Explain]
+```
+
+入口至少存在于：
+
+```text
+Skill Detail
+/ Skill Palette Preview
+Agent → Skills
+Plugin → Provided Skills
+```
+
+## 389.1 SkillVisualizationIR
+
+Skill 真源先投影为结构化 IR：
+
+```text
+SkillVisualizationIR
+
+identity
+version
+purpose
+triggers
+inputs
+preconditions
+permissions/auth
+runtime compatibility
+routing conditions
+tools/actions
+workflow steps
+branches
+retries/failure paths
+side effects
+outputs/artifacts
+provider plugin
+source refs
+```
+
+可视化是 Projection，不是真源。
+
+点击节点应能回到实际：
+
+```text
+SKILL.md / Manifest
+Tool definition
+Permission requirement
+Plugin
+Usage Receipt
+Source file
+```
+
+## 389.2 两级可视化
+
+默认提供免费的轻量：
+
+```text
+Instant Skill Map
+```
+
+由 Workbench 根据 Manifest / Tool / Workflow metadata 确定性生成，不额外调用模型。
+
+对于复杂 Skill，用户可以主动选择：
+
+```text
+Deep Visual Explain
+```
+
+使用当前 Agent 对 Skill 文档/代码做结构理解，再生成更高质量的 SkillVisualizationIR / Diagram Spec。
+
+这样符合现有成本原则：
+
+> 简单 Skill 不花额外 AI 成本；复杂 Skill 真正需要理解时才调用当前主模型。
+
+---
+
+# 390. Archscribe 作为 Premium Skill Visualization / Diagram Renderer 参考与可选集成
+
+`lazypay/Archscribe` 很适合这一层，但不应硬编码进 Workbench Core。
+
+推荐架构：
+
+```text
+Skill Truth
+   ↓
+SkillVisualizationIR
+   ├── Built-in Lightweight Renderer
+   │      → interactive Workbench view
+   │
+   └── Archscribe Adapter / Skill（optional）
+          → .excalidraw
+          → PNG
+          → GIF / MP4
+          → SVG
+          → interactive HTML
+```
+
+Archscribe 当前公开仓库把自己定位为 Codex / Claude Skill + 本地渲染器，支持 panorama / swimlane / graph 三类布局，并可输出 editable Excalidraw、PNG、GIF、MP4，以及可选 SVG/交互 HTML；仓库采用 MIT License。
+
+在本项目中建议两种用途：
+
+```text
+A. Agent Skill
+   用户显式 /archscribe
+   → 生成项目架构 / 流程动态图
+
+B. Skill Studio Renderer
+   Visual Explain → Export with Archscribe
+   → 生成高级版 Skill 说明图
+```
+
+第一阶段优先：
+
+```text
+Codex-compatible Skill integration
+```
+
+DeepSeek Harness 只有在其 Skill/Plugin Adapter 能可靠执行对应 local renderer contract 时才标记 `Adapted`；不能因为 Archscribe README 写了 Codex/Claude 就假定 DeepSeek Native Compatible。
+
+由于 Archscribe 依赖 Python / Playwright / Chromium 等运行环境，它属于：
+
+```text
+Optional Skill / Integration Pack
+```
+
+而不是 Workbench 基础安装必需项。
+
+---
+
+# 391. Skill 数量问题：限制的是“每轮暴露/候选集”，不是 Agent Library 安装总数
+
+视频材料中的“7~10 个较好”只能作为经验参考，不作为固定限制。
+
+正式引入：
+
+```text
+Skill Exposure Budget
+```
+
+区分：
+
+```text
+Installed Skills
+Enabled Skills
+Auto-route Eligible Skills
+Candidate Skills for Current Turn
+Matched Skills
+Invoked Skills
+```
+
+一个 Agent 完全可以安装：
+
+```text
+40 Skills
+```
+
+但当前 Turn 的 Router 可能只把：
+
+```text
+8 个高相关候选
+```
+
+暴露给后续选择逻辑。
+
+最终上限不按固定数量决定，而结合：
+
+```text
+Skill metadata token cost
+Model / Harness capability
+Current task
+Agent profile
+Explicit user invocation
+Router confidence
+Cache impact
+Benchmark result
+```
+
+用户显式 `/skill-name` 不受自动候选数量限制，只做兼容性/权限 hard filter。
+
+Skill Studio 可以显示：
+
+```text
+Installed             37
+Auto-route eligible   18
+Current exposure       8Matched                3
+Invoked                1
+```
+
+从而把“装了很多 Skill”和“本轮模型同时面对很多 Skill”彻底分开。
+
+---
+
+# 392. Skill Visual Explain 与 Skill Usage Ledger 联动
+
+Skill 可视化不能只画静态说明，还应该允许切换：
+
+```text
+DESIGN
+定义上这个 Skill 怎么工作
+
+LIVE USAGE
+过去真实是怎么被调用的
+```
+
+`LIVE USAGE` 直接叠加已有：
+
+```text
+SkillInvocationReceipt
+Capability Usage Ledger
+Plugin Effect Ledger
+```
+
+例如流程节点显示：
+
+```text
+Router Match
+1,240 times
+
+Invoke Tool A
+93% success
+
+Approval Required
+18%
+
+Failure Path B
+7%
+```
+
+这样用户不仅知道：
+
+> Skill 设计上“应该怎么工作”
+
+还知道：
+
+> 它在我的 Agent 里“实际上怎么工作”。
+
+高级 Archscribe 导出仍然只是某一时刻的 Snapshot；实时 Usage 画布继续由 Workbench 自己渲染。
+
+---
+
+# 393. v0.35.1 Decision Log — Core Agent Boundary / Native Subagents / Skill Visualization
+
+## D-385 — Core Agent Runtime Is DeepSeek/Codex Only
+
+**决定：** 持久 Workbench Agent 的 Direct Chat / 可见 Agent Turn 只允许 DeepSeek Harness、Codex Harness 或二者 Hybrid；Claude Code/OpenCode/OpenClaw/ACP/Generic CLI 不作为主 Agent Runtime。  
+**状态：** Accepted
+
+## D-386 — Direct-Agent Parallelism Uses Harness-native Subagents
+
+**决定：** 单 Agent Chat 内开启并行/多任务时，优先调用当前 DeepSeek/Codex Harness 自带的 subagent/worker primitive；无该能力时降级为顺序或允许的 DeepSeek↔Codex Hybrid，不用外部 CLI 偷偷替代。  
+**状态：** Accepted
+
+## D-387 — Native Subagent Is Not a Workbench Agent Instance
+
+**决定：** Harness 内部 subagent 使用 HarnessWorkerRef 表示，默认不创建 agent_id / Private MemorySpace / Agent Library entry；只有显式 Promote/Create 才成为长期 Workbench Agent。  
+**状态：** Accepted
+
+## D-388 — AUTO_TEAM Assigns Agent First, Execution Worker Second
+
+**决定：** Mission Planner 先做 Task→Workbench Agent 分配；Agent 核心 Harness 只在 DeepSeek/Codex 中选择。Room Policy 允许时，Agent 才可为具体 Task 请求 ExternalExecutionWorker。  
+**状态：** Accepted
+
+## D-389 — External CLI/Harness Belongs to Room Worker Domain
+
+**决定：** Claude Code、OpenCode、OpenClaw/ACP 及未来 CLI Adapter 作为 Room/Mission task-scoped Execution Worker；默认无独立 Agent Identity / Private Memory，不进入 Direct Agent Runtime Router。  
+**状态：** Accepted
+
+## D-390 — Capability Matrix Is Domain-scoped
+
+**决定：** Capability Probe / Materialization 保留，但 Direct Agent 使用 CoreHarnessCapability，Room Worker 使用 RoomWorkerCapability；不能让外部 Worker capability 扩大 Direct Agent 可选 Runtime 集合。  
+**状态：** Accepted
+
+## D-391 — First Release External-Backend Scope Reduced
+
+**决定：** Direct Agent 首版只验收 DeepSeek Native + Codex Native 的 Session/Resource/Approval/Trace/Native-subagent 路径；Claude Code/OpenCode/ACP 作为 Room Worker 独立后续阶段，不是 Direct Agent 首版完成条件。  
+**状态：** Accepted
+
+## D-392 — Skill Studio Has Visual Explain
+
+**决定：** Skill Studio 必须能从 Skill 真源生成 SkillVisualizationIR，并提供轻量交互式 Visual Explain；可视化不是 Skill 真源，节点必须可回到 Manifest/Tool/Permission/Source/Receipt。  
+**状态：** Accepted
+
+## D-393 — Archscribe Is Optional Premium Renderer / Skill
+
+**决定：** Archscribe 作为可选 Skill/Integration Pack：既可由 Agent 显式调用生成架构/流程图，也可作为 Skill Visual Explain 的高级导出 Renderer；Workbench Core 不依赖其 Python/Playwright/Chromium 运行栈。  
+**状态：** Accepted
+
+## D-394 — Skill Count Is Not Hard-capped at 7–10
+
+**决定：** 不把视频中的 7~10 个经验值写成 Agent 安装上限；通过 Skill Exposure Budget 控制每轮 auto-route candidate/exposed set，并按模型、Harness、Token、任务与 benchmark 调整。  
+**状态：** Accepted
+
+## D-395 — Explicit Skill Invocation Bypasses Exposure Count, Not Compatibility
+
+**决定：** 用户显式 `/skill` 可直接进入 Skill Intent，不受自动候选数量限制；仍必须经过 Runtime/Model/Tool/Permission/Workspace 等确定性兼容性过滤。  
+**状态：** Accepted
+
+## D-396 — Skill Visualization Supports Design vs Live Usage
+
+**决定：** Skill Visual Explain 同时支持静态 DESIGN 视图与基于 SkillInvocationReceipt / Usage Ledger 的 LIVE USAGE 视图；高级导出是 Snapshot，实时状态继续由 Workbench renderer 负责。  
+**状态：** Accepted
+
+---
+
+# 394. Personal Primary Agent 作为跨界面 Personal Operator
+
+主聊天中的 `Personal Primary Agent` 不只是一个聊天对象，还应成为用户操作整个 Workbench 的自然语言入口，但它仍然只是一个普通的持久 Workbench Agent：
+
+```text
+Personal Primary Agent
+agent_id = ag_primary_xxx
+Private MemorySpace = memory://agent/ag_primary_xxx
+Core Runtime = DeepSeek Harness / Codex Harness / Hybrid
+```
+
+它可以通过 Workbench Control Plane 暴露的结构化工具/API 完成：
+
+```text
+room.create
+room.add_agent
+room.remove_agent
+room.set_coordinator
+room.get_state
+room.dispatch
+mission.create
+mission.resume
+mission.pause
+mission.get_state
+mission.assign
+mission.request_replan
+```
+
+因此用户可以直接在主聊天说：
+
+```text
+“帮我建一个 Runtime 研发群，
+拉 Architect、Coding、Reviewer 进去，
+后面这个功能就在里面做。”
+```
+
+执行链为：
+
+```text
+User
+  ↓
+Personal Primary Agent
+  ↓ intent
+Workbench Room / Mission Tools
+  ↓
+Room Registry / Agent Registry / Scheduler
+  ↓
+真实创建 Room / Membership / Mission
+```
+
+主 Agent 不能通过“在回答里说已经创建”来代替真实工具执行；只有 Tool/API 成功后才能把结果反馈给用户。
+
+这使 Main Chat 成为：
+
+```text
+Personal Command Surface
+```
+
+但 Workbench Core 仍然是实际 Control Plane，Personal Agent 不获得绕过 Scheduler / Runtime native permission / Project policy 的特权。
+
+---
+
+# 395. Room Default Agent 不做隐藏新 Agent；正式采用 Room Coordinator Role Binding
+
+不新增一个系统级的：
+
+```text
+Room Master Agent
+Room Brain
+Room Shared Agent
+```
+
+否则会出现新的身份、记忆、模型成本和状态真源问题。
+
+正式定义：
+
+```text
+RoomCoordinatorBinding {
+  roomId
+  coordinatorAgentId
+  assignedBy
+  assignedAt
+  policy
+}
+```
+
+`Room Coordinator` 是一个 **Role Binding**，必须绑定到一个真实 Workbench Agent Instance。
+
+默认规则：
+
+```text
+从 Personal Primary Agent 主聊天创建 Room
+→ 当前 Personal Primary Agent = Room Coordinator
+
+从某个 Agent 页面创建 Room
+→ 当前 Agent = Room Coordinator
+
+从 Project / Room UI 手工创建
+→ 默认 Personal Primary Agent
+→ 用户可在创建时或之后改成其他 Agent
+```
+
+所以一个 Room 可能是：
+
+```text
+Runtime Development Room
+
+Coordinator
+My Agent
+DeepSeek/Codex Auto
+
+Members
+Architect Agent
+Coding Agent
+Reviewer Agent
+```
+
+当 Room 中的用户发送一条没有 `@` 的普通消息：
+
+```text
+“现在这个项目进行到哪了？”
+```
+
+默认先交给：
+
+```text
+Room Coordinator
+```
+
+由它判断是直接回答、查询 Mission 状态、还是调用 Room Participation Router 选择其他 Agent。
+
+---
+
+# 396. Room Coordinator 与 Mission Lead 必须分离
+
+`Room Coordinator` 是稳定的 Room 默认承接者；`Mission Lead` 是某一个具体 Mission 的计划/协调负责人。
+
+二者可以相同：
+
+```text
+Room Coordinator = My Agent
+Mission Lead      = My Agent
+```
+
+也可以不同：
+
+```text
+Room Coordinator = My Agent
+
+Mission: Runtime v2
+Mission Lead = Architect Agent
+```
+
+例如用户在 Room 中说：
+
+```text
+“@Architect，你带着大家把 Runtime v2 做完。”
+```
+
+则：
+
+```text
+Architect Agent
+→ Mission Lead
+```
+
+但 Room 默认闲聊、状态查询、创建下一项工作仍可由 `My Agent` 这个 Coordinator 承接。
+
+这样避免把一个长期用户代理同时强迫成所有 Mission 的专业负责人。
+
+正式语义：
+
+```text
+Room Coordinator
+= WHO RECEIVES UNADDRESSED ROOM INTENT
+
+Mission Lead
+= WHO OWNS THE CURRENT MISSION PLAN
+
+Scheduler
+= WHO AUTHORIZES / EXECUTES THE TASK GRAPH
+```
+
+三者不能合并成一个“万能主脑”。
+
+---
+
+# 397. 同一个 Personal Agent 可存在于 Main Chat 和多个 Room，但 Runtime Binding 必须隔离
+
+同一个 Agent Identity 可以同时参与：
+
+```text
+Main Chat
+Room A
+Room B
+Room C
+```
+
+并继续使用同一个：
+
+```text
+agent_id
+Private MemorySpace
+Agent Definition / Instance Overlay
+```
+
+但绝不能共享同一个原生 Harness Session/Thread。
+
+正确结构：
+
+```text
+                     My Agent
+                   agent_id = A
+                  MemorySpace A
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+   Main Conversation  Room A         Room B
+   RuntimeBinding M   Binding RA     Binding RB
+   Context M          Context RA     Context RB
+                      Cursor RA      Cursor RB
+```
+
+原因：
+
+```text
+Agent Identity
+≠ Conversation
+≠ Room
+≠ Runtime Binding
+```
+
+如果复用同一个 DeepSeek/Codex native session，Main Chat 和 Room 的上下文会串线，恢复/分支/成本统计也无法正确归属。
+
+因此每个 Room Membership 至少维护：
+
+```text
+agentId
+roomId
+roomAwarenessCursor
+roomContextRevision
+runtimeBindingRef (lazy / active when needed)
+```
+
+Agent 的私人 Memory 跟 Agent Identity 走；Room 的沟通历史和 Shared Context 跟 Room 走。
+
+---
+
+# 398. Main Chat 支持跨 Room / Agent 的结构化 @ Target
+
+Composer 的 `@` 目标扩展为：
+
+```text
+@Agent
+@Room
+@Room/Agent
+@Mission
+```
+
+用户可以在主聊天中直接说：
+
+```text
+@Runtime研发群
+继续昨天的 Runtime v2。
+```
+
+语义：
+
+```text
+Target = Room
+→ Resolve active Mission / Coordinator
+→ Dispatch
+```
+
+也可以：
+
+```text
+@Runtime研发群/Coding Agent
+把失败的测试继续修完。
+```
+
+语义：
+
+```text
+Target = RoomParticipant
+→ Resolve Room + Agent Instance
+→ Create RoomTurnRequest / Task Dispatch
+```
+
+甚至：
+
+```text
+@Runtime研发群
+让群里的 Agent 一起把 Windows 适配做完。
+```
+
+不能实现为：
+
+```text
+broadcast to every Agent
+```
+
+而应该：
+
+```text
+Room Target
+   ↓
+Coordinator / existing Mission
+   ↓
+Mission Intent
+   ↓
+Mission Planner
+   ↓
+Capability Demand
+   ↓
+Team Assembly / Task Graph
+   ↓
+Scheduler
+```
+
+即“让大家协作”仍然转成正式 Mission，而不是所有 Agent 同时回复。
+
+为避免名称歧义，内部必须使用稳定 `TargetRef`：
+
+```text
+TargetRef {
+  kind: AGENT | ROOM | ROOM_PARTICIPANT | MISSION
+  roomId?
+  agentId?
+  missionId?
+  displayHint?
+}
+```
+
+名称冲突时 UI 显示候选，不让主 Agent静默猜错对象。
+
+---
+
+# 399. Cross-Surface Dispatch：主聊天是控制入口，但实际工作留在目标 Room
+
+从 Main Chat 向 Room 派发工作时，不复制一份完整工作到 Main Conversation。
+
+例如：
+
+```text
+User in Main Chat
+“@Runtime研发群/Coding Agent 继续修测试”
+```
+
+主 Agent完成工具调用后，在 Main Chat 只显示轻量投影：
+
+```text
+已派发到 Runtime研发群
+→ Coding Agent
+→ Mission M-82 / Task T-117
+[打开 Room] [查看 Task]
+```
+
+真正执行日志继续属于：
+
+```text
+Room
+Mission
+Task
+Run
+```
+
+结果完成后 Main Chat 可以收到：
+
+```text
+linked completion projection
+```
+
+例如：
+
+```text
+Runtime研发群 · T-117 已完成
+Tests 128/128 passed
+Review waiting
+[查看]
+```
+
+避免 Main Chat 和 Room 各保存一份重复聊天/执行历史。
+
+---
+
+# 400. 主 Agent → Room 的上下文传递采用 DispatchPacket，不复制私人记忆
+
+Personal Primary Agent 之所以适合作为默认 Room Coordinator，是因为它已经拥有稳定用户关系与自己的 Private Memory；但这不意味着：
+
+```text
+Main Agent Private Memory
+→ 自动复制给整个 Room
+```
+
+主聊天跨 Room 派发时生成结构化：
+
+```text
+DispatchPacket {
+  targetRef
+  objective
+  userExplicitRefs[]
+  projectRefs[]
+  resourceRefs[]
+  taskRefs[]
+  constraints[]
+  requestedMode
+  sourceConversationRef
+}
+```
+
+默认不包含：
+
+```text
+完整 Main Conversation
+完整 Personal Memory
+其他 Room 历史
+```
+
+Room/目标 Agent 再根据自身身份构建：
+
+```text
+自己的 Private Memory
++
+Room Context
++
+Project Shared Context
++
+DispatchPacket
++
+Task/Handoff Context
+```
+
+从而做到：
+
+```text
+User continuity
+≠ Personal-memory broadcasting
+```
+
+如果主 Agent从私人 Memory 得到一个对当前 Room 有价值的事实，应当先转化为普通任务约束，或经过已有 Candidate → Project/Room Shared Context 的正式提升流程，而不是直接暴露 Memory Record。
+
+---
+
+# 401. Room Coordinator 可以自动组队，但仍通过 Planner / Scheduler
+
+用户可以只告诉主 Agent：
+
+```text
+“建一个群聊，把这个桌面端的 Windows 适配做完，
+你自己安排人。”
+```
+
+允许执行：
+
+```text
+Personal Primary Agent
+      ↓
+room.create
+      ↓
+Coordinator = Personal Primary Agent
+      ↓
+mission.create
+      ↓
+Mission Charter
+      ↓
+Capability Gap
+      ↓
+Invite existing Agents / create approved temporary Agents
+      ↓
+Task Graph
+      ↓
+Scheduler
+```
+
+如果 Room Policy 为：
+
+```text
+AUTO_TEAM
+```
+
+并处于预算/人数/模板等边界内，可以不再次打扰用户。
+
+但 Coordinator 只能：
+
+```text
+PROPOSE / REQUEST
+```
+
+不能绕过：
+
+```text
+Agent Registry
+Project policy
+Scheduler
+DeepSeek/Codex native permission
+Budget / parallel limits
+```
+
+这保证“全自动化”不等于“无边界地自我复制”。
+
+---
+
+# 402. Room Coordinator 故障时保持 Agent Identity，不优先换“另一个大脑”
+
+因为 Coordinator 是一个真实 Agent Instance，所以其 Runtime 故障优先处理为：
+
+```text
+same Agent Identity
+→ Rebind DeepSeek/Codex Runtime
+```
+
+例如：
+
+```text
+My Agent
+Coordinator of Room A
+Codex Binding failed
+       ↓
+Auto Policy permits
+       ↓
+Rebind same My Agent to DeepSeek Harness
+```
+
+此时：
+
+```text
+coordinatorAgentId 不变
+Private MemorySpace 不变
+Room 不换负责人
+```
+
+只有 Agent 被 Archive / Disabled，或者用户明确要求替换 Coordinator，才改变：
+
+```text
+coordinatorAgentId
+```
+
+从而避免“Runtime 失败”被误处理为“换了一个 Agent 人格/记忆”。
+
+---
+
+# 403. v0.35.2 Decision Log — Personal Agent / Room Coordinator / Cross-Surface Dispatch
+
+## D-397 — Personal Primary Agent Is the Natural-language Workbench Operator
+
+**决定：** Personal Primary Agent 可通过结构化 Workbench Control Plane tools/API 创建/管理 Room、Mission、Membership 和 Dispatch，但它不是新的 Control Plane，也不能绕过 Scheduler、Policy 或 Harness 原生权限。  
+**状态：** Accepted
+
+## D-398 — Room Default Agent Is a Role Binding, Not a Hidden New Agent
+
+**决定：** 不创建隐藏 Room Master Agent；Room 的默认 Agent 采用 `RoomCoordinatorBinding` 绑定真实 Workbench Agent Instance。  
+**状态：** Accepted
+
+## D-399 — Creator Agent Becomes Default Room Coordinator
+
+**决定：** 从主 Agent Chat 创建 Room 时，当前 Agent（通常为 Personal Primary Agent）默认成为 Coordinator；从 Project/UI 无 Agent 上下文创建时默认使用 Personal Primary Agent，用户可修改。  
+**状态：** Accepted
+
+## D-400 — Room Coordinator and Mission Lead Are Separate Roles
+
+**决定：** Coordinator 负责无 @ Room Intent、Room 生命周期和默认入口；Mission Lead 对单个 Mission 负责规划/协调。两者可相同也可不同。  
+**状态：** Accepted
+
+## D-401 — Same Agent Identity May Join Multiple Surfaces, Native Sessions May Not
+
+**决定：** 同一个 Agent 可同时存在于 Main Chat 和多个 Room，共享自己的 agent_id / Private MemorySpace；每个 Conversation/Room 必须维护独立 RuntimeBinding / Context / Awareness Cursor，禁止复用同一个 Harness session。  
+**状态：** Accepted
+
+## D-402 — Main Composer Supports @Room and @Room/Agent
+
+**决定：** `@` Target 扩展为 Agent / Room / RoomParticipant / Mission；主 Agent 可识别并通过结构化 `TargetRef` 把意图派发到目标 Room 或成员。  
+**状态：** Accepted
+
+## D-403 — “Let the Room Work Together” Creates/Continues a Mission, Not a Broadcast
+
+**决定：** 面向 Room 的协作型指令进入 Mission Planner / Team Assembly / Scheduler，不向所有成员同时广播模型 Turn。  
+**状态：** Accepted
+
+## D-404 — Cross-Surface Dispatch Keeps Execution Truth in the Target Room
+
+**决定：** Main Chat 只保留派发/完成的链接投影；Room/Mission/Task/Run 保持执行真源，避免聊天与事件重复。  
+**状态：** Accepted
+
+## D-405 — DispatchPacket, Not Private-memory Copy
+
+**决定：** Main Agent 到 Room/Agent 的上下文传递使用结构化 DispatchPacket、ResourceRef、TaskRef 与 Shared Context refs；默认不复制 Personal Memory 或完整 Main Conversation。  
+**状态：** Accepted
+
+## D-406 — Personal Memory Can Personalize Coordination but Does Not Become Room Shared Context
+
+**决定：** Coordinator 可使用自己的 Private Memory 理解用户偏好和连续意图，但 Memory Record 不自动写入 Room/Project Shared Context；需要共享的事实仍走正式 Candidate/Publish 路径。  
+**状态：** Accepted
+
+## D-407 — Room Coordinator Uses Core Agent Runtime Policy
+
+**决定：** Coordinator 作为真实 Workbench Agent，其核心执行仍仅使用 DeepSeek Harness / Codex Harness / Hybrid；ExternalExecutionWorker 仍只属于具体 Mission Task。  
+**状态：** Accepted
+
+## D-408 — AUTO_TEAM May Be Initiated from Main Chat
+
+**决定：** 用户可在主 Chat 直接要求创建 Room 并“自动安排人”；Personal Agent 可连续调用 Room/Mission tools 启动 AUTO_TEAM，只要符合预算、人数、模板、Project policy 与 Scheduler 边界。  
+**状态：** Accepted
+
+## D-409 — Runtime Failure Does Not Imply Coordinator Identity Replacement
+
+**决定：** Coordinator 的 DeepSeek/Codex Runtime 故障优先以同一 Agent Identity rebind/fallback 处理；只有 Agent 本身不可用或明确重新指派时才替换 Coordinator Agent。  
+**状态：** Accepted
+
+## D-410 — Main Chat Becomes a Personal Command Surface Without Becoming a Duplicate Project Dashboard
+
+**决定：** Main Chat 可以查询/派发/创建/恢复跨 Room 工作，并返回紧凑状态卡和 deep link；完整执行详情继续留在 Room / Mission / Control Center，不把主聊天变成第二份项目状态真源。  
+**状态：** Accepted
+
+---
+
+# 404. Workbench Control Tools：让主 Agent 真正操作整个工作台
+
+## 404.1 设计目标
+
+Personal Primary Agent 既然承担 Personal Command Surface，就必须能够把用户自然语言意图可靠地转化为 Workbench 产品动作，例如：
+
+```text
+“建一个 Runtime 开发群，Architect 当 Lead，自动开始。”
+“让开发群继续昨天那个任务。”
+“把 Reviewer 加进来，等测试完以后独立 Review。”
+“这个 Mission 先暂停。”
+“把刚才的结论提升成 Decision Candidate。”
+```
+
+这些动作不能靠 Prompt 约定，也不能让 Agent 直接改 SQLite、前端 Store 或 Event Log，而应该进入稳定的：
+
+```text
+Personal Agent
+     ↓
+Workbench Control Tool Gateway
+     ↓
+Domain Command / Query API
+     ↓
+Room / Mission / Task / Agent / Knowledge / Workspace Services
+     ↓
+Event Store + Canonical Domain State
+```
+
+Workbench Control Tools 是 **产品控制接口**，不是第三套 Agent Runtime，也不是 Shell 替代品。
+
+---
+
+# 405. Control Tool 与 Harness Tool 的边界必须绝对清楚
+
+主 Agent 能调用两类完全不同的工具。
+
+第一类属于 Workbench：
+
+```text
+创建 Room
+邀请 / 移除 Agent
+设置 Coordinator
+创建 / 启动 / 暂停 / 恢复 Mission
+派发 / 重新分配 Task
+创建 Handoff
+请求 Review
+查询 Project / Room / Mission 状态
+创建 Knowledge / Decision Candidate
+打开某个 Surface
+创建 Workspace Safety Point
+```
+
+第二类属于当前 DeepSeek / Codex Harness：
+
+```text
+读取 / 修改代码和文件
+执行 shell / build / test
+调用 Runtime native tools
+启动 Harness native subagent / worker
+执行 git / compiler / Blender / ffmpeg 等实际工作
+```
+
+原则：
+
+```text
+Workbench Tool
+= 改“工作台里的工作关系和产品状态”
+
+Harness Tool
+= 真正“在执行环境里干活”
+```
+
+例如用户说：
+
+```text
+“让 Coding Agent 修 router.rs。”
+```
+
+主 Agent 应：
+
+```text
+workbench.dispatch / task.assign
+      ↓
+Coding Agent 接到 Task
+      ↓
+Coding Agent 的 Codex Harness
+      ↓
+Codex native file/shell tools 修改 router.rs
+```
+
+主 Agent 不应该通过一个 Workbench `write_file()` 工具替 Coding Agent 直接写文件，否则会破坏 Agent 身份、Run lineage、Harness native permission、Diff/Review 与 Workspace Safety Point 语义。
+
+---
+
+# 406. Control Tool 不做“一个万能 act()”，而采用强类型 Domain Tool
+
+不建议暴露：
+
+```text
+workbench.act({ type: "anything", payload: {...} })
+```
+
+这种万能接口，因为它会导致：
+
+```text
+Schema 难验证
+模型容易误填参数
+审计语义模糊
+版本升级困难
+权限 / Governance 难定位
+```
+
+优先采用稳定的 Domain Tool，例如：
+
+```text
+workbench.room.create
+workbench.room.read_state
+workbench.room.add_agent
+workbench.room.remove_agent
+workbench.room.set_coordinator
+
+workbench.mission.create
+workbench.mission.launch
+workbench.mission.pause
+workbench.mission.resume
+workbench.mission.cancel
+workbench.mission.request_replan
+
+workbench.task.read
+workbench.task.assign
+workbench.task.reassign
+workbench.task.create_handoff
+workbench.task.request_review
+
+workbench.agent.resolve
+workbench.agent.list_available
+workbench.agent.create_temporary
+
+workbench.project.read_state
+workbench.project.read_attention
+
+workbench.knowledge.create_candidate
+workbench.decision.create_candidate
+
+workbench.workspace.read_state
+workbench.workspace.create_checkpoint
+
+workbench.dispatch.send
+workbench.surface.open
+```
+
+其中“删除”类动作优先使用明确语义：
+
+```text
+archive
+remove_member
+cancel
+trash
+```
+
+而不是笼统的 `delete`。
+
+---
+
+# 407. Query / Command / Job 三种 Tool 语义
+
+所有 Control Tool 应明确属于三类之一。
+
+### Query
+
+只读，快速返回 Projection / Ref：
+
+```text
+read_project_state
+read_room_state
+read_mission_state
+list_agents
+resolve_target
+search
+read_attention
+```
+
+### Command
+
+改变 Workbench 产品状态：
+
+```text
+create_room
+add_agent
+launch_mission
+assign_task
+pause_mission
+create_handoff
+create_decision_candidate
+```
+
+Command 不等待长时间 AI/Runtime 工作完成，只确认：
+
+```text
+命令是否被接受
+对象创建/状态改变是否成功
+后续工作引用是什么
+```
+
+### Job / Run-triggering Command
+
+会启动长过程，例如：
+
+```text
+mission.launch
+mission.resume
+task.request_review
+workspace.transfer
+```
+
+立即返回：
+
+```text
+MissionRef
+TaskRef
+JobRef
+RunRef
+```
+
+真正进度通过 Event Store / subscribe / read_state 查询。
+
+因此 Agent 不会因为启动一个 40 分钟 Mission 而把一个 Tool Call 挂 40 分钟。
+
+---
+
+# 408. TargetRef：自然语言名称不能直接成为控制对象身份
+
+用户会说：
+
+```text
+“让开发群里的小王 Agent 继续。”
+“@Runtime群/Reviewer 看一下。”
+“把那个测试 Agent 加进来。”
+```
+
+Composer / Target Resolver 应尽早转换成稳定引用：
+
+```ts
+type TargetRef =
+  | { kind: 'agent'; agentId: string }
+  | { kind: 'room'; roomId: string }
+  | { kind: 'room-participant'; roomId: string; agentId: string }
+  | { kind: 'mission'; missionId: string }
+  | { kind: 'task'; taskId: string }
+  | { kind: 'project'; projectId: string }
+```
+
+如果名称歧义：
+
+```text
+Reviewer
+Reviewer
+Reviewer
+```
+
+不能让模型猜一个 ID。
+
+应返回候选给 Agent / UI，让用户或上层意图解析明确目标。
+显式 `@` 得到的 TargetRef 具有最高优先级，不允许 Agent偷偷换成另一个对象。
+
+---
+
+# 409. ActionContext：每一个控制动作都必须知道“是谁、从哪里发起”
+
+每次 Command 至少携带：
+
+```ts
+type ActionContext = {
+  requestId: string
+  userId: string
+  agentId?: string
+  originTurnId?: string
+  conversationId?: string
+  projectId?: string
+  roomId?: string
+  missionId?: string
+  taskId?: string
+}
+```
+
+这样 Event Store 可以明确记录：
+
+```text
+User U1
+  ↓ Main Chat Turn T-912
+Personal Agent A1
+  ↓ workbench.room.create
+Room R8
+```
+
+而不是只留下：
+
+```text
+Room created by AI
+```
+
+这对于以后 Debug、审计、Undo、成本归属与跨 Agent Dispatch 都很重要。
+
+---
+
+# 410. Command 必须幂等，避免 Agent Retry 创建两个 Room / 两个 Task
+
+Agent Tool Call 可能因为：
+
+```text
+网络断开
+Harness 重试
+客户端重连
+Tool response 丢失
+进程 crash
+```
+
+发生重复发送。
+
+因此所有有副作用 Command 必须支持：
+
+```text
+idempotencyKey
+```
+
+例如：
+
+```text
+create Room request
+idempotencyKey = turn-912:create-runtime-room
+```
+
+第一次：
+
+```text
+Room R8 created
+```
+
+响应丢失后再次调用：
+
+```text
+same key
+→ return Room R8
+```
+
+绝不能创建：
+
+```text
+Runtime Room
+Runtime Room (2)
+```
+
+同样适用于：
+
+```text
+Mission launch
+Task creation
+Agent invite
+Handoff creation
+Review request
+Knowledge candidate
+```
+
+---
+
+# 411. expectedRevision：避免 AI 用旧状态覆盖人刚刚做的新修改
+
+例如 Main Agent 刚读取：
+
+```text
+Room R8
+Coordinator = Agent A
+revision = 14
+```
+
+此时用户在 UI 手动改成：
+
+```text
+Coordinator = Agent B
+revision = 15
+```
+
+旧 Tool Call 再执行：
+
+```text
+set_coordinator(... expectedRevision=14)
+```
+
+必须返回：
+
+```text
+CONFLICT
+currentRevision=15
+```
+
+而不是把用户刚才的修改覆盖掉。
+
+因此关键修改支持 Optimistic Concurrency：
+
+```text
+expectedRevision / expectedEtag
+```
+
+Agent 应重新读取状态，再决定是否仍需要操作。
+
+---
+
+# 412. Preview / Dry-run：复杂控制动作先形成可执行计划，但不强迫用户每次确认
+
+复杂动作例如：
+
+```text
+“建个团队，把 Windows 版本做完。”
+```
+
+内部可以先生成：
+
+```text
+ActionPreview
+
+Create Room: Windows Runtime
+Coordinator: My Agent
+Add Agents: Architect, Coding, Reviewer
+Create Mission: Windows Runtime Port
+Budget: ¥10
+Autonomy: AUTO_TEAM
+```
+
+如果用户已经明确说：
+
+```text
+“你自己安排并开始。”
+```
+
+且满足既有 Project Governance / Budget / AUTO_TEAM 边界，则 Preview 可以在后台直接 commit，不必再次打扰用户。
+
+如果操作涉及：
+
+```text
+扩大预算
+不可逆永久删除
+导出 Private Memory
+邀请外部成员
+修改组织级配置
+```
+
+则按对应产品业务规则要求明确确认。
+
+这里不是新 Runtime 权限系统；文件、Shell、命令等真正 Runtime 副作用仍由 DeepSeek/Codex native permission 决定。
+
+---
+
+# 413. CommandReceipt：主 Agent 不靠“我已经帮你做好了”证明操作成功
+
+每个 Control Command 返回结构化 Receipt：
+
+```ts
+type CommandReceipt = {
+  commandId: string
+  requestId: string
+  action: string
+  status: 'COMMITTED' | 'REJECTED' | 'CONFLICT' | 'QUEUED'
+  affectedRefs: ResourceRef[]
+  createdRefs?: ResourceRef[]
+  resultingRevision?: string
+  jobRef?: ResourceRef
+  reasonCode?: string
+  timestamp: number
+}
+```
+
+例如：
+
+```text
+COMMAND RECEIPT
+
+room.create
+COMMITTED
+
+Room
+R-008 Runtime Development
+
+Coordinator
+Agent A1
+```
+
+主 Agent 的自然语言回答只是 Receipt 的用户友好投影。
+
+真正事实仍来自 Domain State / Event Store。
+
+---
+
+# 414. Tool Exposure Budget：不要把 80 个 Workbench Tools 每轮全塞给模型
+
+Workbench 后续工具会越来越多。
+
+如果每一个 Main Chat Turn 都暴露：
+
+```text
+Room 20 tools
+Mission 20 tools
+Task 20 tools
+Workspace 20 tools
+Knowledge 20 tools
+Admin 30 tools
+...
+```
+
+会造成：
+
+```text
+Context 成本上升
+Tool 选择准确率下降
+Prefix Cache 波动
+无关能力噪声增加
+```
+
+因此增加：
+
+```text
+ControlToolCatalog
+      ↓
+ToolsetProjection
+      ↓
+Current Active Toolset
+```
+
+例如普通聊天：
+
+```text
+search
+read_project_state
+resolve_target
+surface.open
+```
+
+用户说“创建群聊”：
+
+```text
++ room.create
++ room.add_agent
++ agent.list_available
+```
+
+进入 Mission 协调：
+
+```text
++ mission.*
++ task.*
++ dispatch.*
+```
+
+只有管理员上下文才可能暴露 Admin Tools。
+
+与 Skill Exposure Budget 一样，Installed/Available Tool 数量与当前 Turn 暴露给模型的 Tool 数量分离。
+
+---
+
+# 415. Toolset Projection 必须是确定性能力投影，不让模型自己决定自己有哪些权力
+
+Active Toolset 至少根据：
+
+```text
+Surface
+Agent Type
+Current Project / Room / Mission
+User Access Role
+Object ownership
+Project governance
+Runtime Adapter tool support
+Current product state
+```
+
+确定。
+
+模型可以请求：
+
+```text
+“我需要 Mission 控制工具。”
+```
+
+但最终 Tool Gateway 是否暴露由 Workbench 决定。
+
+不能出现：
+
+```text
+Agent 说“我需要 admin tool”
+→ Workbench 就把 admin tool 给它
+```
+
+同样，这属于应用级能力暴露与业务授权，不替代 Harness native file/shell permission。
+
+---
+
+# 416. Personal Agent 可以协调其他 Agent，但不能冒充其他 Agent
+
+例如：
+
+```text
+My Agent
+↓
+dispatch.send(target=Reviewer)
+```
+
+真正执行时必须形成：
+
+```text
+Dispatcher
+My Agent
+
+Target Actor
+Reviewer Agent
+
+Run Actor
+Reviewer Agent
+```
+
+不能记录成：
+
+```text
+My Agent executed Review as Reviewer
+```
+
+更不能允许：
+
+```text
+workbench.memory.write(agentId=Reviewer)
+workbench.turn.run_as(agentId=Reviewer)
+```
+
+Personal Agent 对其他 Agent 的合法操作是：
+
+```text
+邀请
+派发
+请求
+Handoff
+查询可公开状态
+调整 Task Assignment（在治理允许范围内）
+```
+
+而不是读取/修改对方 Private Memory 或伪造对方 Turn。
+
+---
+
+# 417. `dispatch.send` 是跨 Surface 的核心控制原语
+
+统一支持：
+
+```text
+Main Chat → Room
+Main Chat → Room/Agent
+Room → Agent
+Room → Mission
+Project Control Center → Agent/Room/Mission
+```
+
+结构：
+
+```ts
+type DispatchRequest = {
+  target: TargetRef
+  objective: string
+  resourceRefs?: ResourceRef[]
+  projectRefs?: ResourceRef[]
+  taskRefs?: ResourceRef[]
+  constraints?: string[]
+  requestedMode?: 'MESSAGE' | 'TASK' | 'MISSION'
+}
+```
+
+解析规则：
+
+```text
+MESSAGE
+→ 普通 Room Turn / Agent Turn
+
+TASK
+→ Task Contract / assignment
+
+MISSION
+→ Mission Planner / Scheduler
+```
+
+如果用户说：
+
+```text
+“@Runtime群 大家把 Windows 适配做完。”
+```
+
+显然属于：
+
+```text
+MISSION
+```
+
+而不是向所有 Agent 广播一句聊天。
+
+---
+
+# 418. Workbench Control Tools 与 Skill 的关系
+
+Skill 可以调用 Workbench Control Tools，但 Skill 不拥有更高权限。
+
+例如：
+
+```text
+/project-kickoff Skill
+```
+
+可以封装：
+
+```text
+读取 Project State
+创建 Room
+添加 Architect/Coding/Reviewer
+创建 Mission
+创建 Initial Decision Candidate
+打开 Mission Canvas
+```
+
+这只是一个高层 Workflow。
+
+真实动作仍由：
+
+```text
+Workbench Control Tools
+```
+
+完成。
+
+Skill InvocationReceipt 与 CommandReceipt 相互链接：
+
+```text
+SkillInvocation S-82
+   ├── Command C-1 room.create
+   ├── Command C-2 room.add_agent
+   └── Command C-3 mission.launch
+```
+
+因此 Skill Visual Explain 以后还能直接显示：
+
+```text
+这个 Skill 会读取什么
+会创建什么
+会改哪些 Workbench 对象
+哪些步骤会进入 Harness Runtime
+```
+
+---
+
+# 419. Control Tool 本身也进入 Glass Box
+
+Agent Turn Trace 增加：
+
+```text
+WORKBENCH CONTROL
+
+resolve_target       12 ms   ✓
+room.create           8 ms   ✓
+room.add_agent       14 ms   ✓
+mission.launch       21 ms   ✓
+```
+
+点击：
+
+```text
+mission.launch
+```
+
+查看：
+
+```text
+Caller
+My Agent
+
+Origin
+Main Chat Turn 912
+
+Mission
+Windows Runtime
+
+Mode
+AUTO_TEAM
+
+Receipt
+C-812
+```
+
+用户因此能区分：
+
+```text
+Agent 只是说了什么
+```
+
+和：
+
+```text
+Agent 实际改变了工作台什么
+```
+
+---
+
+# 420. 主聊天中的自然语言操作实例
+
+用户：
+
+```text
+帮我建一个 Runtime 开发群，
+把 Architect、Coding、Reviewer 拉进去，
+Architect 负责这个 Windows 适配，自动开始。
+```
+
+期望执行链：
+
+```text
+User
+ ↓
+Personal Primary Agent
+ ↓
+resolve Agent refs
+ ↓
+room.create
+ ↓
+room.add_agent × 3
+ ↓
+mission.create
+ ↓
+mission.set_lead(Architect)
+ ↓
+mission.launch(AUTO_TEAM)
+ ↓
+Scheduler
+ ↓
+Task Graph
+```
+
+主聊天最后只需要显示紧凑结果：
+
+```text
+Windows Runtime 群已创建并开始执行。
+
+Lead      Architect
+Coding    Ready
+Reviewer  Waiting
+Mission   Running
+
+[打开群聊] [查看流程]
+```
+
+完整过程留在 Room / Mission / Event Store。
+
+---
+
+# 421. v0.36 Decision Log — Workbench Control Tools / Personal Command API
+
+## D-411 — Personal Agent Operates Workbench Through Typed Control Tools
+
+**决定：** Personal Primary Agent 对 Room / Mission / Task / Agent / Knowledge / Surface 的操作必须通过稳定、强类型的 Workbench Control Tools / Domain API，不直接改数据库、Event Store 或前端状态。  
+**状态：** Accepted
+
+## D-412 — Workbench Control and Harness Execution Are Separate Tool Domains
+
+**决定：** Workbench Control Tools 管理产品状态、协作关系与调度；文件读写、Shell、Build/Test、Git、Runtime native subagent 等执行动作继续由 DeepSeek/Codex Harness 原生工具完成。  
+**状态：** Accepted
+
+## D-413 — No Generic Universal `act()` as the Primary Agent API
+
+**决定：** 采用 Room/Mission/Task/Agent/Knowledge/Workspace 等语义清晰的 Domain Tools，不把所有副作用压进一个无类型万能动作接口。  
+**状态：** Accepted
+
+## D-414 — Control Tools Are Explicitly Query, Command, or Long-running Job
+
+**决定：** Tool Contract 明确只读 Query、状态 Command 与长过程 Job/Run-triggering Command；长过程立即返回 Ref，不阻塞 Tool Call 等待最终完成。  
+**状态：** Accepted
+
+## D-415 — Stable TargetRef Before Cross-surface Control
+
+**决定：** @Agent / @Room / @Room-Agent / @Mission 等自然语言目标尽早解析成稳定 TargetRef；歧义目标不得由模型静默猜测。  
+**状态：** Accepted
+
+## D-416 — Every Command Carries ActionContext and Origin Lineage
+
+**决定：** 所有控制命令保存 user/agent/turn/conversation/project/room/mission/request lineage，确保跨界面动作可追溯。  
+**状态：** Accepted
+
+## D-417 — All Mutating Control Commands Are Idempotent
+
+**决定：** 创建 Room、启动 Mission、邀请 Agent、创建 Task/Handoff/Review/Candidate 等副作用命令必须支持 idempotencyKey，重试不得重复创建业务对象。  
+**状态：** Accepted
+
+## D-418 — Optimistic Revision Check Protects Human Changes
+
+**决定：** 关键 Workbench 对象修改支持 expectedRevision/etag；AI 基于旧状态发出的命令不得覆盖用户或其他 Agent 更新后的新版本。  
+**状态：** Accepted
+
+## D-419 — Preview Is Internal by Default, Confirmation Depends on Existing Governance
+
+**决定：** 复杂控制操作先可形成 ActionPreview；用户已明确授权且落在 AUTO_TEAM/预算/Project Governance 范围内可自动 commit，只有相应业务规则要求时才再次请求确认。  
+**状态：** Accepted
+
+## D-420 — CommandReceipt Is Product Truth for Agent-side Actions
+
+**决定：** Agent 对 Workbench 的实际修改以 CommandReceipt + Domain Event 为事实证据，自然语言“已经完成”不构成状态真源。  
+**状态：** Accepted
+
+## D-421 — Tool Exposure Budget Keeps Main Agent Context Small
+
+**决定：** Available Control Tools 与当前 Turn Active Toolset 分离；ToolsetProjection 按 Surface、Role、Project/Room/Mission 状态与上下文动态暴露小而相关的工具集。  
+**状态：** Accepted
+
+## D-422 — Agent May Request a Toolset, but Workbench Decides Exposure
+
+**决定：** 模型可请求某类 Workbench 能力，但不能自行提升工具范围；Active Toolset 由 Workbench 业务状态和既有授权决定。  
+**状态：** Accepted
+
+## D-423 — Personal Agent Coordinates but Never Impersonates Another Agent
+
+**决定：** 主 Agent 可 invite/dispatch/assign/handoff/query 其他 Agent，但不能 run-as、读取/写入其 Private Memory 或伪造对方 Turn；真实 Run Actor 始终是实际执行 Agent。  
+**状态：** Accepted
+
+## D-424 — Dispatch Is the Cross-surface Control Primitive
+
+**决定：** Main Chat / Room / Project Control Center 的跨 Agent/Room/Mission 派发统一落为结构化 DispatchRequest；MESSAGE / TASK / MISSION 进入不同执行路径。  
+**状态：** Accepted
+
+## D-425 — Skills Compose Control Tools Without Gaining Extra Authority
+
+**决定：** Skill 可把多个 Workbench Control Tools 编排成高层操作流程，但 Skill 不拥有额外授权；SkillInvocationReceipt 必须链接其产生的 CommandReceipt。  
+**状态：** Accepted
+
+---
+
+# 422. v0.37 目标：AUTO TEAM 必须能够“中断后继续”，而不是只能顺风运行
+
+此前 Mission / Scheduler / Control Tools 已解决：
+
+```text
+谁负责
+做什么
+怎样分工
+怎样派单
+怎样调用 DeepSeek / Codex
+怎样记录 Workbench 状态
+```
+
+v0.37 解决另一个不同层面的问题：
+
+```text
+如果事情做到一半，系统断了怎么办？
+```
+
+典型故障包括：
+
+```text
+Workbench UI 崩溃
+Workbench Core 进程退出
+电脑重启 / 掉电
+DeepSeek Harness 进程崩溃
+Codex Harness Session 丢失
+网络短暂中断
+云模型 Provider 429 / 5xx
+Runtime 卡死或长时间无响应
+Tool response 已执行但回包丢失
+Harness 已修改文件，但 Workbench 尚未来得及确认
+Mission 中某一个 Agent 失败，而其他 Agent 仍然正常
+```
+
+目标不是把所有故障都“自动重试”掉，而是保证：
+
+```text
+不丢 Mission
+不重复创建业务对象
+不因为恢复而重复修改文件
+不把已经完成的 Task 当成没完成
+不把不确定的副作用当成安全重放
+不因为一个 Runtime 崩溃而丢掉 Agent Identity / Memory / Work State
+```
+
+因此新增：
+
+```text
+Durable Mission Execution
++
+Recovery Coordinator
+```
+
+它们都是 Workbench Control Plane 的确定性基础设施，不是新的 Agent Loop。
+
+---
+
+# 423. 三类状态必须分开：Workbench Durable Truth、Runtime Ephemeral State、Workspace Evidence
+
+恢复可靠性的第一原则：
+
+```text
+Runtime Session 不是 Mission 真源。
+```
+
+系统状态分成三层。
+
+```text
+A. Workbench Durable Truth
+
+Project
+Mission
+MissionPlanRevision
+Task Graph
+Task Contract
+Agent Assignment
+Handoff
+CommandReceipt
+Attention
+Budget
+Event Store
+Decision / Artifact refs
+```
+
+这一层必须持久化，本机进程重启后仍存在。
+
+第二层：
+
+```text
+B. Runtime Ephemeral State
+
+DeepSeek Session
+Codex Thread / Turn
+Runtime process
+native subagents
+stream cursor
+approval request
+provider connection
+```
+
+这一层能恢复最好，不能恢复也不能导致 Workbench 产品状态消失。
+
+第三层：
+
+```text
+C. Workspace Side-effect Evidence
+
+Git branch / worktree
+WorkspaceChangeSet
+Safety Point
+modified files
+Artifact
+Test Result
+Transfer Manifest
+Operation Journal
+```
+
+恢复时真正判断“这个 Task 到底干到哪了”，必须同时看 B 与 C，不能只相信 Harness 最后一句自然语言。
+
+---
+
+# 424. ExecutionCheckpoint：在语义边界持久化，而不是每个 Token 都落盘
+
+不能为了恢复能力，把每一个 streaming token 都写成重型事务。
+
+Workbench 维护：
+
+```text
+ExecutionCheckpoint
+```
+
+建议字段：
+
+```text
+checkpointId
+missionId
+planRevision
+runId
+taskId
+agentId
+runtimeBindingId
+runtimeKind
+runtimeNativeSessionRef
+runEpoch
+lastRuntimeEventCursor
+lastWorkbenchEventId
+workspaceBindingRef
+safetyPointRef
+changeSetRef
+lastAcceptedArtifactRefs
+pendingApprovalRefs
+pendingCommandRefs
+budgetSnapshot
+createdAt
+```
+
+Checkpoint 主要在“语义边界”更新：
+
+```text
+Task Assigned
+Run Started
+Runtime Binding Created
+Meaningful Tool / File Change Evidence
+Task Output Accepted
+Review Result
+Repair Created
+Handoff Accepted
+Task Terminal State
+Mission Plan Revision
+```
+
+Streaming 文本和高频 progress event 只做 coalesced cursor / batch flush，避免大量无意义写放大。
+
+---
+
+# 425. Recovery Coordinator 只做状态机，不做推理
+
+新增组件：
+
+```text
+Recovery Coordinator
+```
+
+职责：
+
+```text
+发现失联
+冻结重复执行入口
+检查 RuntimeBinding
+检查 Workspace Evidence
+选择 Resume / Rebind / Reconcile / Pause
+更新 Run Epoch
+产生 RecoveryReceipt
+```
+
+它不能：
+
+```text
+自己重新规划 Mission
+自己判断代码逻辑是否正确
+自己修改文件
+自己代表 Agent 继续回答
+```
+
+如果恢复过程中发现的是“任务语义失败”，进入：
+
+```text
+Repair / Replan
+```
+
+而不是由 Recovery Coordinator 猜下一步。
+
+---
+
+# 426. 不承诺 Exactly-once；副作用恢复采用“幂等 + 证据 + 对账”
+
+对于 Workbench 自己的 Control Command，例如：
+
+```text
+room.create
+mission.create
+task.assign
+review.request
+```
+
+可以通过：
+
+```text
+idempotencyKey
+```
+
+做到业务级重复调用不重复创建对象。
+
+但对于：
+
+```text
+Codex 修改文件
+DeepSeek 执行 Shell
+外部 CLI 调用
+Git command
+第三方 API
+```
+
+不能轻率宣称：
+
+```text
+Exactly Once
+```
+
+因为存在经典的不确定窗口：
+
+```text
+Harness 已执行成功
+        ↓
+网络断线 / 进程崩溃
+        ↓
+Workbench 没收到完成消息
+```
+
+因此统一采用：
+
+```text
+Effect Intent
+    ↓
+Execution
+    ↓
+Observed Evidence
+    ↓
+Receipt / Reconciliation
+```
+
+副作用状态不确定时，默认：
+
+```text
+DO NOT BLIND REPLAY
+```
+
+先检查 Workspace / Git / Artifact / Runtime Native State。
+
+---
+
+# 427. Run Lease + Fencing Epoch：防止两个“恢复后的同一 Run”同时写
+
+应用重启后最大的危险之一不是 Run 丢失，而是：
+
+```text
+旧 Runtime 其实还活着
++
+Workbench 又启动一个新 Runtime
+```
+
+于是两个执行者同时修改同一 Workspace。
+
+每一个可执行 Run 增加：
+
+```text
+RunLease
+runEpoch
+fencingToken
+```
+
+例如：
+
+```text
+R-821
+Epoch 7
+```
+
+发生 Recovery Rebind 后：
+
+```text
+R-821
+Epoch 8
+```
+
+之后旧 Epoch 7 的迟到事件：
+
+```text
+不得改变当前 Task 状态
+```
+
+必要时只作为：
+
+```text
+Late Evidence
+```
+
+进入审计。
+如果旧进程仍存活，Process Supervisor 优先尝试：
+
+```text
+reattach / terminate / quarantine
+```
+
+再允许 Epoch 8 获得写执行权。
+
+---
+
+# 428. Transport Lost ≠ Run Failed
+
+网络短暂断线不能马上导致：
+
+```text
+启动第二个 Agent Run
+```
+
+Runtime 状态增加更精确的恢复态：
+
+```text
+RUNNING
+CONNECTION_LOST
+RECOVERING
+RESUMED
+STALLED_SUSPECTED
+UNRESPONSIVE
+LOST
+RECONCILING
+PAUSED_RECOVERY
+```
+
+例如：
+
+```text
+Codex stream disconnected
+```
+
+首先：
+
+```text
+CONNECTION_LOST
+```
+
+进入一个有限 grace period，尝试重连原 Binding。
+
+只有确认原执行不可恢复，才进入 Rebind / Reconcile。
+
+避免：
+
+```text
+网络抖一下
+↓
+同一个任务跑两份
+```
+
+---
+
+# 429. Runtime 恢复顺序：Same Binding First，New Binding Last
+
+对于 DeepSeek / Codex Core Agent，恢复优先级建议固定为：
+
+```text
+1. Reconnect transport
+        ↓
+2. Resume same native Session / Thread
+        ↓
+3. Reattach existing runtime process（若协议支持）
+        ↓
+4. Create new RuntimeBinding for SAME Agent
+        ↓
+5. 若当前模式允许 Auto/Hybrid，再考虑 DeepSeek ↔ Codex Recovery Fallback
+        ↓
+6. Pause + Attention
+```
+
+这里第 4 步仍然是：
+
+```text
+同一个 agent_id
+同一个 Private MemorySpace
+新 RuntimeBinding
+```
+
+不是创建新 Agent。
+
+如果用户明确 Pin：
+
+```text
+Codex Only
+```
+
+则恢复失败后不能静默换 DeepSeek。
+
+同样，Pinned Model 也不能因为 Provider 故障静默换模型，除非用户已明确允许对应 fallback policy。
+
+---
+
+# 430. Recovery Capsule：Native Session 真丢了，也不需要把整个聊天重放
+
+如果 native Session 无法 resume，Workbench 为同一个 Agent 创建：
+
+```text
+New RuntimeBinding
+```
+
+并生成：
+
+```text
+RecoveryCapsule
+```
+
+它不是完整 Conversation dump。
+
+推荐包含：
+
+```text
+Agent Identity Ref
+Agent Core Memory revision
+Mission Charter
+Current Plan Revision
+Current Task Contract
+Definition of Done
+Completed dependency outputs
+Accepted Decision / Contract refs
+Handoff packet
+Workspace Binding
+Safety Point / ChangeSet state
+Known side effects
+Pending approval / blocker
+Explicit recovery instruction
+```
+
+其中最关键的是明确：
+
+```text
+DO NOT repeat confirmed completed side effects.
+```
+
+随后 Runtime 从当前真实状态继续，而不是“模拟原 Session 的全部思考过程”。
+
+---
+
+# 431. Uncertain Side Effect：恢复前必须 Reconcile
+
+最危险的状态：
+
+```text
+Task 显示 RUNNING
+Runtime 消失
+文件似乎已经改了
+但没有 Task completion receipt
+```
+
+定义：
+
+```text
+UNCERTAIN_EFFECT
+```
+
+进入：
+
+```text
+Reconciliation
+```
+
+代码工作优先检查：
+
+```text
+Git worktree status
+Run Base Snapshot
+ChangeSet
+modified file hashes / revisions
+Test artifacts
+commit state
+```
+
+普通文件工作检查：
+
+```text
+Resource revision
+mtime / size
+Operation Journal
+Safety Point
+Artifact refs
+```
+
+结果分类：
+
+```text
+EFFECT_CONFIRMED
+→ 不重做副作用，继续 Verify / Review
+
+NO_EFFECT
+→ 可以安全重新执行
+
+PARTIAL_EFFECT
+→ 创建 Repair / Resume Task
+
+CONFLICTING_EFFECT
+→ Pause / Merge / Human Attention
+
+UNKNOWN
+→ 不自动重放
+```
+
+这比简单的“失败以后 Retry 3 次”安全得多。
+
+---
+
+# 432. Read-only Task 与 Side-effect Task 的恢复策略不同
+
+例如：
+
+```text
+分析架构
+读取 Project 状态
+搜索知识
+代码 Review（不执行 PR code）
+```
+
+一般属于：
+
+```text
+READ_ONLY / REPLAY_SAFE
+```
+
+Runtime 丢失以后可以更积极自动重跑。
+
+而：
+
+```text
+修改代码
+删除/移动文件
+生成视频
+运行迁移
+调用外部业务 API
+```
+
+属于：
+
+```text
+SIDE_EFFECTING
+```
+
+必须优先 Resume / Reconcile。
+
+Task Contract 因此增加：
+
+```text
+sideEffectClass
+replayPolicy
+recoveryPolicy
+```
+
+但这只是 Workbench 调度/恢复语义，不替代 Harness 原生权限系统。
+
+---
+
+# 433. Native subagent / worker 恢复：它不是新的 Workbench Agent
+
+主 Agent 在 Direct Agent Domain 中开启多任务并行时，仍然优先使用当前 DeepSeek/Codex Harness 自带的 native subagent / worker。
+
+Workbench 可以投影：
+
+```text
+HarnessWorkerRef
+parentRunId
+nativeWorkerId
+status
+assignedSubtask
+```
+
+但恢复时：
+
+```text
+worker identity
+```
+
+不等同于持久 Agent Identity。
+
+若 Harness 原生支持 worker resume：
+
+```text
+优先 native resume
+```
+
+不支持时：
+
+```text
+Parent Run / Scheduler
+根据已完成 evidence
+重新生成剩余 subtask
+```
+
+不能因为一个 native subagent 丢失，就创建一个新的长期 MemorySpace Agent 冒充它。
+
+---
+
+# 434. Provider 429 / 5xx / 网络故障属于基础设施恢复，不属于 Replan
+
+新增错误分类：
+
+```text
+TRANSIENT_TRANSPORT
+RATE_LIMIT
+PROVIDER_UNAVAILABLE
+RUNTIME_CRASH
+SESSION_LOST
+TOOL_INFRA_FAILURE
+SEMANTIC_FAILURE
+POLICY_BLOCK
+USER_REJECTED
+```
+
+其中：
+
+```text
+429 / timeout / 502
+```
+
+可以：
+
+```text
+exponential backoff
+jitter
+Retry-After
+provider circuit breaker
+```
+
+而：
+
+```text
+代码编译失败
+架构假设错误
+Review 要求修改
+```
+
+不是“基础设施 Retry”。
+
+应该：
+
+```text
+Repair / Replan
+```
+
+否则会出现一个错误代码被同一 Agent 原样重复跑五遍，只烧 Token 不解决问题。
+
+---
+
+# 435. Recovery Budget：恢复也不能无限烧钱
+
+AUTO TEAM 需要单独控制：
+
+```text
+Recovery Attempts
+Recovery Wall Time
+Recovery Model Cost
+Provider Retry Count
+Rebind Count
+```
+
+例如：
+
+```text
+maxRuntimeReconnect = 5
+maxNativeResume = 2
+maxRebind = 1
+maxRecoveryCost = ¥2
+```
+
+达到阈值：
+
+```text
+PAUSED_RECOVERY
+```
+
+进入 Attention Inbox。
+
+不能因为用户睡觉了，系统一个坏 Provider 在后台自动重试一整晚。
+
+---
+
+# 436. Approval 必须可恢复，但不能自动越权
+
+如果 Codex / DeepSeek 原生权限系统正在等待用户批准：
+
+```text
+PENDING_APPROVAL
+```
+
+Workbench 重启以后应该恢复：
+
+```text
+Approval Projection
+Attention Item
+Runtime Native Request Ref
+```
+
+如果原 Runtime Request 仍然有效：
+
+```text
+继续等待原 Approval
+```
+
+如果原 Session 已丢失：
+
+```text
+旧 Approval 标记 EXPIRED / ORPHANED
+```
+
+新的 Runtime 若再次请求，则创建新的 native approval request。
+
+绝不能：
+
+```text
+“之前好像用户会同意”
+↓
+自动 approve
+```
+
+继续坚持：
+
+```text
+Unified Permission UX
+≠
+Unified Permission Engine
+```
+
+---
+
+# 437. App / 机器重启后的 Boot Recovery Sweep
+
+Workbench 启动时不要立刻把所有：
+
+```text
+RUNNING
+```
+
+任务重新启动。
+
+执行：
+
+```text
+Boot Recovery Sweep
+```
+
+大致顺序：
+
+```text
+Load durable Mission / Run state
+        ↓
+Find non-terminal Runs
+        ↓
+Validate Run Lease / Epoch
+        ↓
+Probe DeepSeek / Codex Runtime
+        ↓
+Check native Session / Thread resume capability
+        ↓
+Check Workspace / Safety Point / ChangeSet
+        ↓
+Classify recovery state
+        ↓
+Resume / Reconcile / Pause
+```
+
+UI 可以先基于持久 Projection 立即显示：
+
+```text
+Runtime v2
+Recovering 2 runs…
+```
+
+而不是首页空白等所有 Runtime 恢复完成。
+
+---
+
+# 438. Mission 与 Agent 的“恢复后仍是同一个人”
+
+即使：
+
+```text
+Codex Thread 丢了
+```
+
+只要：
+
+```text
+agent_id = A
+memory://agent/A
+```
+
+不变，Agent 仍然是同一个 Agent。
+
+恢复时允许变化的是：
+
+```text
+RuntimeBinding
+native Session / Thread
+model selection（仅策略允许时）
+```
+
+不允许因为恢复而变化的是：
+
+```text
+Agent Identity
+Private MemorySpace
+Task ownership lineage
+Mission responsibility
+Conversation truth
+Work Item truth
+```
+
+这进一步强化：
+
+```text
+Agent Identity > Runtime Session
+```
+
+---
+
+# 439. Recovery UI：用户需要知道“它恢复了什么”，而不是只看到转圈
+
+Mission / Team View 节点状态可以显示：
+
+```text
+Coding Agent
+RECOVERING
+Codex session reconnecting
+```
+
+或：
+
+```text
+Coding Agent
+RECONCILING
+3 modified files found
+```
+
+恢复完成：
+
+```text
+Recovered
+Session lost → new Codex binding
+Workspace changes preserved
+Task resumed at Verify
+```
+
+Timeline 增加语义事件：
+
+```text
+11:42 Runtime connection lost
+11:42 Recovery started
+11:43 Existing changes reconciled
+11:43 New RuntimeBinding created
+11:44 Task resumed at verification
+```
+
+不要把 300 条底层 reconnect log 默认塞给普通用户。
+
+完整技术细节进入 Glass Box。
+
+---
+
+# 440. RecoveryReceipt / ReconciliationReceipt
+
+新增：
+
+```text
+RecoveryReceipt
+```
+
+示例：
+
+```text
+Run
+R-821
+
+Agent
+Coding Agent
+
+Failure
+SESSION_LOST
+
+Previous Binding
+CB-17
+
+Recovery
+NEW_BINDING
+
+New Binding
+CB-18
+
+Workspace Reconciliation
+EFFECT_CONFIRMED
+
+Resume Point
+VERIFY_OUTPUT
+
+Cost
+¥0.12
+
+Result
+RESUMED
+```
+
+以及：
+
+```text
+ReconciliationReceipt
+```
+
+记录：
+
+```text
+检查了哪些 ResourceRef
+Git base/current revision
+ChangeSet
+Safety Point
+Artifact
+发现哪些已完成/部分完成/冲突
+为什么决定允许 Resume 或禁止 Replay
+```
+
+它们进入 Event Store 与 Glass Box。
+
+---
+
+# 441. 恢复后的 Plan 不默认重写
+
+Runtime 崩溃：
+
+```text
+不是 Replan Trigger 本身。
+```
+
+例如：
+
+```text
+T1 Architecture ✓
+T2 Coding RUNNING
+T3 Test WAITING
+T4 Review WAITING
+```
+
+Codex 崩溃以后，如果 T2 可以恢复：
+
+```text
+仍然是同一 PlanRevision
+```
+
+只有恢复发现：
+
+```text
+当前 Backend 长期不可用
+原 Task 已产生不可合并冲突
+关键前提已经失效
+用户改变目标
+```
+
+才产生：
+
+```text
+Replan Proposal
+```
+
+可靠性问题和任务规划问题必须分开。
+
+---
+
+# 442. 外部 Room Worker 的恢复保证低于 Core Agent，必须显式声明
+
+Room/Mission 中可选的 Claude Code / OpenCode / OpenClaw 等 ExternalExecutionWorker 不属于主 Agent Runtime。
+
+每个 Worker Adapter 声明：
+
+```text
+resumeSupport:
+  FULL
+  SESSION_ONLY
+  PROCESS_ONLY
+  NONE
+```
+
+和：
+
+```text
+replaySafety
+workspaceEvidenceSupport
+eventCursorSupport
+```
+
+AUTO TEAM 在重要 Side-effect Task 上不能把一个：
+
+```text
+resumeSupport = NONE
+```
+
+的 Worker 当成与 Codex/DeepSeek Core Harness 完全同等级的 durable execution backend。
+
+必要时：
+
+```text
+Worker 做 bounded subtask
+↓
+结果回到持久 Workbench Agent / Task
+```
+
+降低故障域。
+
+---
+
+# 443. 数据库与投影恢复：Event Store 是证据，Projection 可重建
+
+Workbench 本地持久层建议继续采用：
+
+```text
+SQLite WAL
+transactional domain writes
+append-oriented event evidence
+incremental projections
+```
+
+如果：
+
+```text
+ProjectControlProjection
+RoomProjection
+MissionProjection
+Usage Projection
+```
+
+损坏，可以：
+
+```text
+Canonical Domain State + Event Evidence
+↓
+Rebuild Projection
+```
+
+但不能把：
+
+```text
+UI Projection
+```
+
+作为唯一持久真源。
+
+同样，Search Index / Cache 仍然属于可重建数据。
+
+---
+
+# 444. Reliability Test Matrix：首版必须真的“杀进程”验证
+
+这类系统不能只写单元测试证明恢复可靠。
+
+首版 4-Agent AUTO TEAM 主链至少要进行故障注入：
+
+```text
+执行中 kill Workbench UI
+执行中 kill Workbench Core
+kill Codex process
+kill DeepSeek Harness process
+网络断开 60 秒
+Provider 返回 429
+Provider 返回 5xx
+Tool 执行成功但模拟 response 丢失
+文件写到一半进程崩溃
+App 重启
+机器重启
+Runtime Session 无法 resume
+旧 Runtime 迟到事件
+用户在恢复期间手动修改同一文件
+```
+
+验收不是：
+
+```text
+“最后能继续回答”
+```
+
+而是检查：
+
+```text
+Task 没重复创建
+文件副作用没重复执行
+旧 Epoch 没覆盖新 Epoch
+用户修改没被恢复逻辑覆盖
+MemorySpace 没换
+MissionPlan 没无故重建
+CommandReceipt / RecoveryReceipt 完整
+Recovery Budget 生效
+```
+
+---
+
+# 445. v0.37 Decision Log — Durable Mission Execution / Runtime Recovery
+
+## D-426 — Workbench Durable Truth Is Independent of Runtime Session
+
+**决定：** Mission / Task / Plan / Assignment / Handoff / Command / Event / Workspace ChangeSet 等产品状态必须独立持久化；DeepSeek/Codex Session/Thread 只是 RuntimeBinding，不作为 Mission 真源。  
+**状态：** Accepted
+
+## D-427 — Recovery Coordinator Is a Deterministic Control-plane State Machine
+
+**决定：** Recovery Coordinator 负责检测、租约、恢复分类、Resume/Rebind/Reconcile/Pause 与 Receipt，不实现第三套 Agent 推理循环。  
+**状态：** Accepted
+
+## D-428 — No Exactly-once Claim Across Arbitrary Harness Side Effects
+
+**决定：** Workbench Control Command 使用幂等键；Harness/File/Shell/外部 API 副作用采用 Evidence + Reconciliation，状态不确定时禁止盲目 Replay，不宣称通用 Exactly Once。  
+**状态：** Accepted
+
+## D-429 — Execution Checkpoints Persist at Semantic Boundaries
+
+**决定：** Checkpoint 记录 Task/Run/Binding/Event Cursor/Workspace Evidence 等恢复信息，优先在语义状态边界持久化，高频 streaming event 采用合并写而非逐 Token 重事务。  
+**状态：** Accepted
+
+## D-430 — Run Lease and Fencing Epoch Prevent Duplicate Writers
+
+**决定：** 每个可执行 Run 使用 Lease/Epoch/Fencing Token；Recovery Rebind 必须递增 Epoch，旧 Runtime 的迟到事件不得修改当前状态。  
+**状态：** Accepted
+
+## D-431 — Connection Loss Does Not Immediately Mean Run Failure
+
+**决定：** Transport lost 与 Runtime lost 分离；短暂断线先在 grace period 内重连原 Binding，不立即启动第二份 Run。  
+**状态：** Accepted
+
+## D-432 — Same Runtime Binding Is Recovered Before Creating a New One
+
+**决定：** 恢复顺序优先 reconnect / native resume / reattach，再建立同 Agent 的新 RuntimeBinding；只有 Auto/Hybrid 与 fallback policy 明确允许时才可在 DeepSeek/Codex 间恢复性切换。  
+**状态：** Accepted
+
+## D-433 — Recovery Rebind Preserves Agent Identity and Private MemorySpace
+
+**决定：** Runtime Session 丢失只允许更换 RuntimeBinding；agent_id、Private MemorySpace、Task ownership 与 Conversation/Work truth 不因恢复而变化。  
+**状态：** Accepted
+
+## D-434 — Recovery Capsule Is Minimal Sufficient State, Not Full Conversation Replay
+
+**决定：** 新 Binding 通过 Mission/Task/Decision/Handoff/Workspace Evidence 等构建 RecoveryCapsule，禁止把完整历史对话当成默认恢复机制。  
+**状态：** Accepted
+
+## D-435 — Uncertain Side Effects Must Reconcile Before Replay
+
+**决定：** Runtime 丢失且副作用状态未知时进入 UNCERTAIN_EFFECT / RECONCILING；只有确认 NO_EFFECT 才可自动 Replay，PARTIAL/CONFLICT/UNKNOWN 进入 Repair、Merge 或 Attention。  
+**状态：** Accepted
+
+## D-436 — Replay Policy Depends on Task Side-effect Class
+
+**决定：** Read-only/replay-safe Task 可更积极自动重放；写文件、外部 API、迁移、媒体生成等 Side-effect Task 必须优先 Resume/Reconcile。  
+**状态：** Accepted
+
+## D-437 — Infrastructure Failure Uses Retry; Semantic Failure Uses Repair/Replan
+
+**决定：** timeout/429/5xx/transport/runtime crash 使用 backoff/resume/recovery；编译失败、Review 不通过、任务假设错误等不做基础设施式盲 Retry，而进入 Repair/Replan。  
+**状态：** Accepted
+
+## D-438 — Recovery Has Its Own Budget and Attempt Limits
+
+**决定：** AUTO TEAM 的 Recovery Attempts、Wall Time、Rebind 次数与恢复成本必须有上限；超过阈值进入 PAUSED_RECOVERY / Attention，禁止无限重试。  
+**状态：** Accepted
+
+## D-439 — Native Approvals Survive as Projection, Never as Auto-approval Authority
+
+**决定：** Workbench 可恢复 DeepSeek/Codex 原生 Approval 的投影和 Attention，但 Session 丢失时旧请求只可 expired/orphaned；恢复逻辑不得自动批准新的 Runtime 请求。  
+**状态：** Accepted
+
+## D-440 — Boot Recovery Sweep Classifies Before Restarting Work
+
+**决定：** Workbench/机器重启后先扫描非终态 Run、验证 Lease/Binding/Workspace Evidence，再 Resume/Reconcile/Pause；不得把所有 RUNNING Task 一股脑重新执行。  
+**状态：** Accepted
+
+## D-441 — Runtime Crash Alone Does Not Rewrite Mission Plan
+
+**决定：** 恢复问题优先在原 PlanRevision 内解决；只有恢复暴露结构性前提失效或任务不可继续时才触发正式 Replan。  
+**状态：** Accepted
+
+## D-442 — External Room Workers Advertise Explicit Recovery Guarantees
+
+**决定：** Room/Mission 的 ExternalExecutionWorker 必须声明 Resume/Replay/EventCursor/WorkspaceEvidence 能力；无恢复能力的 Worker 默认只承担 bounded subtask，不与 Core Agent Harness 伪装成同等级 durable runtime。  
+**状态：** Accepted
+
+## D-443 — Recovery and Reconciliation Are First-class Receipts
+
+**决定：** Resume/Rebind/Reconcile 结果必须形成 RecoveryReceipt / ReconciliationReceipt，并与 Run/Task/Agent/Workspace Evidence 链接，进入 Event Store 与 Glass Box。  
+**状态：** Accepted
+
+## D-444 — Reliability Is Validated with Fault Injection, Not Happy-path Tests Only
+
+**决定：** 首版 AUTO TEAM 必须通过 kill process、断网、429/5xx、response loss、session loss、late event、restart、concurrent human edit 等故障注入测试，重点验证不重复副作用与可审计恢复。  
+**状态：** Accepted
+
+
+# 446. Provider Traffic Control — 为什么 429 / 502 不能继续当普通失败处理
+
+多 Agent / 多任务并行以后，真正最容易把系统拖垮的不是某一个 Agent 推理错误，而是多个 Runtime 在同一时间向同一个云端 Provider 发起 burst：几个 Agent 各自认为自己只有一个请求，但共享同一 Credential / Account / Model 配额后，整体可能瞬间超过 RPM、TPM、并发连接或 Provider 的动态容量。
+
+因此：
+
+```text
+429 / 502 / 503 / 504
+≠ Task FAILED
+≠ Agent FAILED
+≠ Mission FAILED
+```
+
+它们首先属于 **Provider / Transport Capacity Event**。只有在超过恢复预算、确认 Provider 长时间不可用、配额耗尽或用户策略禁止等待/fallback 时，才升级为需要 Attention 的 Mission 问题。
+
+系统必须避免以下错误链：
+
+```text
+10 个并行 Task
+      ↓
+同时请求同一 Provider
+      ↓
+429
+      ↓
+10 个 Task 都判 FAILED
+      ↓
+Scheduler 同时 Retry
+      ↓
+第二次更大的 burst
+      ↓
+更多 429 / 5xx
+      ↓
+Repair / Replan 被错误触发
+      ↓
+成本、延迟、状态全部失控
+```
+
+正确目标是把它变成“排队 + 背压 + 自适应收缩”，而不是“失败 + 重试风暴”。
+
+---
+
+# 447. Provider Traffic Controller — 全 Workbench 的统一流量入口
+
+新增 **Provider Traffic Controller (PTC)**，位于 Scheduler / RuntimeAdapter 与云端模型实际请求之间的控制面。它不是模型 Proxy，也不重新实现 DeepSeek/Codex Harness；它负责对 Workbench 可控制的 Run / Turn / Worker 并发做 Admission Control。
+
+```text
+Mission / Main Chat / Room
+           │
+           ▼
+       Scheduler
+           │
+           ▼
+   RuntimeAdapter
+           │
+           ▼
+Provider Traffic Controller
+           │
+   ┌───────┼────────┐
+   ▼       ▼        ▼
+DeepSeek  Codex   Other approved
+Provider Provider Provider
+```
+
+PTC 维护的不是一个全局“最大并发=4”，而是按真实共享配额建立分层 Capacity Key：
+
+```text
+Provider Account / Credential Ref
+        ↓
+Endpoint / Region
+        ↓
+Model / Model Family
+        ↓
+Runtime / Mission / Priority Class
+```
+
+如果两个 Agent 使用同一个 API Key，它们必须共享上层容量；如果管理员配置了两个彼此独立的 Account/Credential，则可以形成独立容量池。
+
+---
+
+# 448. Planned Parallelism ≠ Remote Model Concurrency
+
+AUTO TEAM 仍然可以规划：
+
+```text
+4 Tasks can run in parallel
+```
+
+但 Scheduler 不应解释成：
+
+```text
+立即启动 4 个远程模型请求
+```
+
+新增两个独立指标：
+
+```text
+Planned Parallelism = 4
+Admitted Remote Concurrency = 2
+```
+
+实际画布可显示：
+
+```text
+Coding A     ● RUNNING
+Testing B    ● RUNNINGResearch C   ◐ WAITING_CAPACITY
+Review D     ◐ WAITING_DEPENDENCY
+```
+
+如果 Provider 压力下降，C 自动获得容量开始执行。Mission 仍然是并行计划，只是执行层根据远端容量做背压。
+
+这种设计允许 Task Graph 追求 Critical Path，同时避免把“能并行”误解成“必须同一毫秒启动”。
+
+---
+
+# 449. RateLimitLease / Capacity Reservation
+
+开始一个需要云模型的 Turn / Run 前，RuntimeAdapter 向 PTC 请求一个 **RateLimitLease**：
+
+```text
+request admission
+    │
+    ├─ provider/account/model
+    ├─ priority
+    ├─ estimated input tokens
+    ├─ max output budget
+    ├─ expected worker fan-out
+    └─ side-effect class
+```
+
+PTC 根据已知限制、当前活跃请求、近期 429/5xx、Provider headers / Retry-After（若可获得）、历史实际 usage 与保守估算决定：
+
+```text
+ADMIT_NOW
+QUEUE
+DEFER_UNTIL
+REJECT_POLICY
+```
+
+开始时使用估算 reservation，结束后再用 UsageReceipt 对账实际 Token / Request 消耗。估算不要求绝对精确，重点是防止并行 Run 在完全不知道彼此存在的情况下同时 burst。
+
+---
+
+# 450. Adaptive Concurrency — 限流发生后自动缩，而不是固定重试
+
+PTC 维护动态 Provider Pressure：
+
+```text
+HEALTHY
+PRESSURED
+THROTTLED
+DEGRADED
+OPEN_CIRCUIT
+QUOTA_EXHAUSTED
+AUTH_ERROR
+OFFLINE
+```
+
+例如原来允许：
+
+```text
+Concurrent Turns = 6
+```
+
+近期出现连续 429，则自动收缩：
+
+```text
+6 → 4 → 2 → 1
+```
+
+稳定一段时间后再缓慢恢复：
+
+```text
+1 → 2 → 3 → 4 ...
+```
+
+不能 429 一结束就瞬间恢复原并发，否则容易形成周期性振荡。容量增长应慢于容量收缩。
+
+502/503/504 如果呈现短时间集中爆发，也会降低并发并进入 degradation window，而不是让所有 Task 同时重试。
+
+---
+
+# 451. Retry Storm Prevention
+
+所有 Provider 重试必须共享同一个 Retry Budget，而不是每个 Agent 自己偷偷重试。
+
+基础策略：
+
+```text
+Retry-After available
+→ obey Retry-After
+
+otherwise
+→ exponential backoff + full jitter
+
+repeated failures
+→ circuit breaker
+```
+
+例如 20 个 Task 同时收到 429，不允许：
+
+```text
+20 Tasks sleep 2s
+↓
+2 秒后再次同时请求
+```
+
+而应该由 Admission Queue 把它们重新分散：
+
+```text
+T1  2.1s
+T2  3.4s
+T3  5.0s
+T4  6.8s
+...
+```
+
+Retry 本身也消耗 Mission Recovery Budget / Provider Retry Budget；达到阈值后进入 WAITING_PROVIDER_RECOVERY 或 PAUSED_RECOVERY，而不是无限循环。
+
+---
+
+# 452. Provider Failure Taxonomy — 不是所有 429 / 5xx 都一样
+
+RuntimeAdapter 将原始错误规范化为 `ProviderFailure`，至少区分：
+
+```text
+RATE_LIMIT_TRANSIENT
+CAPACITY_OVERLOAD
+NETWORK_TRANSIENT
+UPSTREAM_5XX
+QUOTA_EXHAUSTED
+AUTH_INVALID
+MODEL_UNAVAILABLE
+REQUEST_TOO_LARGE
+POLICY_REJECTED
+UNKNOWN_PROVIDER_ERROR
+```
+
+例如：
+
+```text
+429 + Retry-After
+→ RATE_LIMIT_TRANSIENT
+```
+
+而“账户余额/配额已耗尽”即使 Provider 也返回 429，也应归到：
+
+```text
+QUOTA_EXHAUSTED
+```
+
+前者可以自动等待，后者继续 Retry 没有意义，应直接进入 Attention / 可选 fallback。
+
+401/403、模型不存在、请求超过 Context 限制等也不能按 502 一样 Retry。
+
+---
+
+# 453. 新增 WAITING_* 状态，避免把容量问题污染 Task Graph
+
+Task / Run 增加非失败等待态：
+
+```text
+WAITING_CAPACITY
+WAITING_RATE_LIMIT
+WAITING_PROVIDER_RECOVERY
+```
+
+这些状态：
+
+```text
+不计入 FAILED
+不触发 Repair
+不触发 Replan
+不消耗语义重试次数
+```
+
+只有超过 Policy / Wall-time / Budget 阈值后，才可能提升为：
+
+```text
+BLOCKED_PROVIDER
+PAUSED_RECOVERY
+```
+
+并进入 Attention Inbox。
+
+这样 Project Health 也能准确表达：
+
+```text
+Mission 正常
+Provider pressured
+2 tasks queued
+```
+
+而不是错误显示“项目失败”。
+
+---
+
+# 454. Priority & Fairness — 主聊天不能被后台 Mission 饿死
+
+全局 Provider Capacity 需要优先级与公平调度。建议默认优先级：
+
+```text
+P0  User interactive turn / explicit user command
+P1  Approval continuation / critical-path verification
+P2  Foreground Mission critical-path Task
+P3  Foreground Mission non-critical parallel Task
+P4  Background Mission / speculative branch / low-priority retry
+```
+
+例如后台已有 8 个 Agent 在跑时，用户在主聊天问一句简单问题，不应该排到十几分钟以后。
+
+但 P0 也不能无限抢占；PTC 需要保留公平性和每 Mission/Project 的最大 share，避免一个大型 Project 把整个团队账户的 Provider 配额占满。
+
+---
+
+# 455. Harness Native Subagents 是最大的“隐藏 Burst”风险
+
+Direct Agent 的 native subagents 继续由 DeepSeek Harness / Codex Harness 自己管理，但从 Provider Capacity 角度不能假装不存在。
+
+如果 Harness 支持配置：
+
+```text
+max_workers
+max_parallel_turns
+model concurrency
+```
+
+RuntimeAdapter 应根据当前 `ProviderLoadEnvelope` 下发保守上限。
+
+如果 Harness 不暴露内部每个模型调用，则标记：
+
+```text
+Consumption Visibility = OPAQUE
+```
+
+PTC 对该 Run 使用加权保守 Slot，例如：
+
+```text
+1 Harness Run with native parallel workers
+≈ capacityWeight 2~4
+```
+
+权重通过历史 Usage/429 反馈校准。
+
+因此 Canvas 可以显示：
+
+```text
+Coding Agent
+Codex
+Native workers: 3
+Provider pressure: HIGH
+Parallel worker cap: 2
+```
+
+Workbench 不控制 Harness 内部推理逻辑，但可以控制“同时允许多少个这种高负载 Run 进入远端 Provider”。
+
+---
+
+# 456. 5xx / Streaming 中断与副作用恢复必须接回 v0.37 Reconciliation
+
+如果 502/503 发生在模型请求真正开始之前，可以安全重新 Admission。
+
+但如果：
+
+```text
+模型已经输出部分内容
+↓
+已经触发 tool call
+↓
+文件已经被修改
+↓
+随后 502 / stream lost
+```
+
+绝对不能把它当成“普通模型请求重试”。
+
+此时进入 v0.37：
+
+```text
+UNCERTAIN_EFFECT
+→ RECONCILING
+→ EFFECT_CONFIRMED / PARTIAL_EFFECT / NO_EFFECT / CONFLICTING_EFFECT
+```
+
+也就是说 Provider Retry 与 Side-effect Recovery 是两层：
+
+```text
+Provider Traffic Controller
+负责“什么时候可以再发请求”
+
+Recovery Coordinator
+负责“这个任务是否允许重新执行”
+```
+
+PTC 不能绕过 Recovery Coordinator 直接 Replay 一个已经可能产生文件/外部副作用的 Turn。
+
+---
+
+# 457. Fallback 规则 — 自动切换只能发生在用户允许的范围内
+
+如果当前是 `Auto` 且存在能力等价、管理员批准、成本/权限策略允许的 Provider/Model，可以：
+
+```text
+Provider A THROTTLED
+      ↓
+候选 Provider B
+      ↓
+Capability / Policy / Cost check
+      ↓
+Fallback
+```
+
+但如果用户明确 Pin：
+
+```text
+DeepSeek model X only
+```
+
+则容量不足时应：
+
+```text
+WAITING_RATE_LIMIT
+```
+
+而不是偷偷换模型。
+
+对于主 Agent Runtime，也继续遵守 Core Agent Domain：只能在 DeepSeek Harness / Codex Harness 的既定 Auto/Hybrid policy 中进行恢复性选择，不能因为限流把主 Agent切到 Claude Code/OpenCode 等 External Worker。
+
+---
+
+# 458. Provider Pressure UI / Attention
+
+普通用户不需要看到 RPM/TPM 算法细节，但必须能理解“为什么没有马上开始”。
+
+Mission / Project UI 可以显示：
+
+```text
+Provider capacity constrained
+
+Running       2
+Queued        3
+Retrying      0
+
+Next task starts automatically
+when capacity becomes available.
+```
+
+单个 Task：
+
+```text
+Testing Agent
+WAITING_RATE_LIMIT
+
+Not failed
+Retry scheduled automatically
+```
+
+只有长时间、Quota Exhausted、Auth Error、所有允许 Provider 都不可用时才进入 Attention：
+
+```text
+Needs You
+Cloud model quota exhausted
+[查看 Provider]
+[暂停 Mission]
+```
+
+Glass Box 才显示：
+
+```text
+429 count
+Retry-After
+current concurrency window
+capacity reservations
+circuit state
+failure classifier
+```
+
+---
+
+# 459. ProviderCapacityReceipt / Traffic Trace
+
+新增：
+
+```text
+ProviderCapacityReceipt
+```
+
+示例：
+
+```text
+Provider
+DeepSeek Cloud
+
+Credential
+cred://team/deepseek-main
+
+Requested
+Coding Agent / T-82
+
+Estimated
+Input 18K
+Output max 6K
+Weight 1.5
+
+Decision
+QUEUED
+
+Reason
+Provider THROTTLED
+
+Observed
+429 x3 / 60s
+
+Concurrency
+2 / 2
+
+Retry After
+8.4s
+```
+
+完成以后追加实际 Usage 与 capacity reconciliation。
+
+这允许以后回答：
+
+```text
+“为什么这个 Agent 等了 20 秒？”
+```
+
+而不是让模型自己编一个解释。
+
+---
+
+# 460. Fault Injection 必须增加“并发限流风暴”测试
+
+v0.37 的 Reliability Test 再增加专门的 Provider Pressure 测试：
+
+```text
+20 parallel Tasks → shared API key
+synthetic 429 burst
+alternating 429 / 502
+Retry-After varying values
+quota exhausted mid-Mission
+one Provider down, second healthy
+all Providers down
+stream disconnect after tool side effect
+Harness native subagents create hidden burst
+main chat arrives while background Mission saturated
+```
+
+验收重点不是“最终全部 Retry 成功”，而是：
+
+```text
+没有 retry storm
+没有把 rate limit 误判为 semantic failure
+没有无意义 Repair/Replan
+主聊天仍可获得交互容量
+critical path 优先
+Pinned model 不被偷偷替换
+副作用状态不确定时没有盲重放
+Provider 恢复后队列渐进恢复，不瞬间重新 burst
+```
+
+---
+
+# 461. v0.37.1 Decision Log — Provider Traffic Control / Rate-limit-aware Parallelism
+
+## D-445 — Provider Capacity Events Are Not Semantic Task Failures
+
+**决定：** 429、短暂 5xx、transport overload 与动态容量不足默认归 Provider/Infrastructure 层，不把 Task 标记 FAILED，也不触发 Repair/Replan。  
+**状态：** Accepted
+
+## D-446 — All Workbench-visible Cloud Demand Passes Through Provider Admission Control
+
+**决定：** 新增 Provider Traffic Controller，对 Workbench 可控制的 Main Chat、Mission、Room Agent Run/Turn 做全局 Admission；共享 Credential/Account 的请求共享容量池。  
+**状态：** Accepted
+
+## D-447 — Planned Parallelism Is Decoupled from Admitted Remote Concurrency
+
+**决定：** Task Graph 可保持高层并行计划，但实际远端模型并发由 Provider Capacity/Pressure 动态决定；容量不足使用 WAITING_CAPACITY 而非启动后失败。  
+**状态：** Accepted
+
+## D-448 — Provider Capacity Uses Hierarchical Envelopes and Reservations
+
+**决定：** Capacity 至少按 Provider Account/Credential → Endpoint/Region → Model/Family → Runtime/Mission 建层级；Turn/Run 开始前建立 RateLimitLease/估算 Reservation，结束后用实际 Usage 对账。  
+**状态：** Accepted
+
+## D-449 — Concurrency Shrinks Fast and Recovers Slowly Under Pressure
+
+**决定：** 连续 429/5xx 自动降低 admission window；恢复采用渐进增容，避免限流结束后所有排队 Task 同时重新 burst。  
+**状态：** Accepted
+
+## D-450 — Retry Is Centralized and Jittered to Prevent Retry Storms
+
+**决定：** Provider Retry 遵守 Retry-After；否则指数退避 + jitter，并受共享 Retry Budget / Circuit Breaker 管理。禁止每个 Agent 独立同步 Retry。  
+**状态：** Accepted
+
+## D-451 — Provider Failure Is Normalized Before Recovery Policy
+
+**决定：** RuntimeAdapter 将原始 Provider 错误规范化为 RateLimit/Overload/Network/Quota/Auth/ModelUnavailable/RequestTooLarge 等类别；不同类别使用不同等待、fallback、attention 或 fail-fast 策略。  
+**状态：** Accepted
+
+## D-452 — Capacity Waiting Is a First-class Non-failure State
+
+**决定：** 新增 WAITING_CAPACITY / WAITING_RATE_LIMIT / WAITING_PROVIDER_RECOVERY；这些状态不计 Task Failure，不消耗 Semantic Retry，不触发 Repair/Replan。  
+**状态：** Accepted
+
+## D-453 — Interactive Work and Critical Path Receive Capacity Priority
+
+**决定：** Provider Admission 支持优先级与公平调度，默认保证用户主聊天和 Critical Path 不被后台大规模 Mission 饿死，同时限制单 Project/Mission 独占共享 Provider Capacity。  
+**状态：** Accepted
+
+## D-454 — Native Harness Subagents Consume Provider Capacity Even When Internals Are Opaque
+
+**决定：** DeepSeek/Codex native subagent 并行必须计入 Provider Load Envelope；能配置并发则 Adapter 下发上限，不能观测内部模型调用时使用保守 capacity weight 并标记 OPAQUE_CONSUMPTION。  
+**状态：** Accepted
+
+## D-455 — Provider Retry Never Bypasses Side-effect Reconciliation
+
+**决定：** 5xx/stream lost 如果发生在可能已经产生 Tool/File/External Side Effect 的阶段，必须先进入 v0.37 Reconciliation；PTC 只决定何时可再次请求，不拥有直接 Replay 副作用 Turn 的权力。  
+**状态：** Accepted
+
+## D-456 — Automatic Provider/Model Fallback Must Respect Existing Pin and Core-Agent Runtime Policy
+
+**决定：** Auto 模式可在能力/成本/管理员策略允许范围内 fallback；显式 Pin 不静默替换。主 Agent Runtime 继续只在 DeepSeek Harness/Codex Harness 既定 policy 内选择，限流不能把其切到 ExternalExecutionWorker。  
+**状态：** Accepted
+
+## D-457 — Provider Pressure Is Observable Through Receipts and Projections
+
+**决定：** 新增 ProviderPressureProjection / ProviderCapacityReceipt，记录 admission、排队、压力、retry、concurrency window 与 usage reconciliation；用户看到简洁等待原因，Glass Box 显示详细流量事实。  
+**状态：** Accepted
+
+## D-458 — Reliability Testing Includes Rate-limit and Retry-storm Fault Injection
+
+**决定：** AUTO TEAM 故障注入必须覆盖共享 API Key 并发 burst、429/502 混合、quota exhaustion、hidden native-subagent burst、主聊天抢占和 side-effect 后 stream loss，并验证无 retry storm、无误判 Repair/Replan、无盲重放。  
+**状态：** Accepted
+
+---
+
+# 462. Token Pressure Control：限流不仅看请求数，也必须看 Token 体量
+
+v0.37.1 已经控制了 Provider 的请求并发、429/5xx、Retry Storm 与容量队列，但并发请求数只是压力的一部分。
+
+对于许多云模型服务，真正影响吞吐和限流的还包括：
+
+```text
+Input Tokens
+Output Tokens
+Tokens Per Minute / Rolling Token Window
+Long-context Prefill Pressure
+Concurrent Long Turns
+```
+
+因此两个 Mission 都是 `3 concurrent turns`，实际压力可能完全不同：
+
+```text
+Mission A
+3 × 4K input
+≈ 12K input tokens
+
+Mission B
+3 × 80K input
+≈ 240K input tokens
+```
+
+Workbench 不能把它们当成相同负载。
+
+新增：
+
+```text
+Token Pressure Controller
+```
+
+它不调用任何模型，只做预算、估算、上下文装配和 Usage 对账，并与 Provider Traffic Controller 联动。
+
+总体路径：
+
+```text
+Task / Agent Turn
+      ↓
+Context Assembly
+      ↓
+TokenBudgetPlan
+      ↓
+Context Minimization
+      ↓
+Provider Admission
+      ↓
+DeepSeek / Codex
+      ↓
+Actual Usage
+      ↓
+TokenReceipt + Capacity Reconciliation
+```
+
+核心目标不是单纯“省钱”，而是同时：
+
+```text
+降低单 Turn 成本
+降低 TPM / Context Pressure
+降低 429 概率
+缩短 Prefill 延迟
+增加同一额度下可安全运行的并发任务数
+```
+
+---
+
+# 463. No-extra-model Token Optimization Baseline
+
+继续遵守 v0.33.2 的成本原则：
+
+> 已经有 DeepSeek/Codex 主模型能完成的工作，不为了“Prompt Compression”再默认部署或付费调用第二个模型。
+
+首版 Token Optimization 必须以确定性方法为主：
+
+```text
+No Embedding Model
+No Dedicated Reranker
+No Prompt-compression Model
+No Background Summarizer Model
+```
+
+可以使用：
+
+```text
+FTS / Symbol / Relation Index
+Parser / AST
+Deterministic Filters
+Token Budget
+Content Hash / Dedup
+Structured Projection
+Range Read
+Head/Tail/Failure-only Log View
+Cached Derived Context
+Current Agent Model only when semantic reasoning is actually needed
+```
+
+Microsoft LLMLingua 这类“用小模型进一步压缩 Prompt”的研究可以保留为未来可选实验，但由于它本身仍需要额外模型/运行依赖，不进入默认架构。
+
+---
+
+# 464. Token 消耗必须拆账，而不是只显示一个总数
+
+每个 Agent Turn 的 Token 应按来源拆分：
+
+```text
+Stable Prefix
+  Agent Definition
+  Core Memory
+  Stable Tool/Skill schemas
+  Project Baseline
+
+Dynamic Context
+  Task Contract
+  Retrieved Memory
+  Project Knowledge
+  Handoff
+  Conversation Delta
+
+Workspace Material
+  code excerpts
+  diff
+  logs
+  document pages
+
+Tool Results
+  shell
+  test
+  git
+  parser
+
+Model Output
+  visible answer
+  structured output
+
+Provider-specific Reasoning Tokens
+  if exposed by provider
+```
+
+这样优化时能回答：
+
+```text
+“到底是 Tool Output 太大？”
+“Conversation 太长？”
+“Skill schemas 暴露太多？”
+“Repository context 太大？”
+```
+
+而不是笼统告诉用户：
+
+```text
+本次 82K tokens
+```
+
+---
+
+# 465. Tool Output 是第一优先级：Raw Truth 保留，Context View 压缩
+
+Coding Agent 最容易浪费 Token 的地方往往不是用户 Prompt，而是：
+
+```text
+cargo test
+npm test
+git diff
+git log
+rg / grep
+ls / tree
+build logs
+docker output
+```
+
+因此新增统一概念：
+
+```text
+RawToolOutput
+       ↓
+ToolOutputProjection
+       ↓
+Agent Context
+```
+
+例如 `cargo test` 原始输出 20,000 tokens：
+
+```text
+RawToolOutput
+完整保存到 Run Artifact / bounded log store
+
+Agent Context
+FAILED 3 / PASSED 418
++ 3 个失败测试
++ 关键 stack frames
++ error/warning lines
++ ref://run/R82/tool-output/17
+```
+
+Agent 如果还需要细节：
+
+```text
+workbench.read_tool_output(
+  ref,
+  range / pattern / failed-section
+)
+```
+
+再按需读取。
+
+这是 **Lossless Retention + Lossy Context Projection**：
+
+- 真源不丢；
+- Prompt 不塞全部；
+- Agent 仍然能够追溯原始证据。
+
+---
+
+# 466. 借鉴 RTK / chop / context-compress，但不直接把第三方输出当真源
+
+几个 GitHub 项目值得做 Integration Spike：
+
+### RTK / Rust Token Killer
+
+参考：`https://github.com/rtk-ai/rtk`
+
+核心值得借鉴：
+
+```text
+CLI Proxy
+→ command-aware deterministic filtering
+→ compact output
+→ usage/savings metrics
+```
+
+特别适合：
+
+```text
+git
+cargo
+npm/pnpm
+pytest
+grep
+find
+docker
+```
+
+其项目宣称很多常见 Bash 输出可减少 60–90%，但它自己的文档也明确说明这些数字衡量的是 **shell output bytes/tokens estimate**，不能直接等同于总 API 账单节省率。因此 Workbench 只把这些数字当项目 Benchmark，不作为我们的产品 SLA。
+
+### chop
+
+参考：`https://github.com/AgusRdz/chop`
+
+值得借鉴：
+
+```text
+Hook / Proxy
+→ 针对具体命令压缩 verbose output
+→ 在 tool_result 进入 Agent Context 之前减少噪声
+```
+
+### context-compress
+
+参考：`https://github.com/Open330/context-compress`
+
+值得借鉴的不是“某个压缩百分比”，而是：
+
+```text
+大输出不直接放进 Context
+↓
+完整内容进入本地索引/存储
+↓
+Agent 看到摘要 + pointer
+↓
+需要时 FTS/BM25 再取局部
+```
+
+这与 Workbench 已有的 FTS/No-Embedding 基线高度一致。
+
+Workbench 可以先实现自己的 `ToolOutputProjectionProvider`，再决定是否复用这些项目的 command filter。
+
+---
+
+# 467. Critical Signal Preservation：压缩不能把真正错误删掉
+
+任何 Tool Output Filter 都必须有不可删除信号集合，例如：
+
+```text
+ERROR
+FATAL
+PANIC
+FAILED
+WARNING (policy configurable)
+Security Finding
+Assertion failure
+Compiler diagnostic
+Changed file / diff hunk
+Approval request
+Exit code
+Signal / timeout
+```
+
+对于测试：
+
+```text
+通过测试
+→ count / grouped summary
+
+失败测试
+→ 保留名称 + error + relevant trace
+```
+
+对于 Git Diff：
+
+```text
+重复 header / context
+→ 可裁剪
+
+真正新增/删除行
+→ 不能因为“节省 Token”而消失
+```
+
+如果压缩器无法证明某一类输出可以安全处理：
+
+```text
+fallback = RAW / CONSERVATIVE
+```
+
+绝不能为了 Token 指标牺牲正确性。
+
+---
+
+# 468. Aider Repo Map 模式非常适合 Workbench 的代码上下文
+
+Aider 的 Repository Map 是非常值得直接借鉴的设计思想：
+
+```text
+Tree-sitter / code tags
+       ↓
+definition / reference graph
+       ↓
+graph ranking
+       ↓
+按 token budget 选择最重要 symbol
+       ↓
+compact repository map
+```
+
+它不会把整个 Repository 全部塞进 Context，而是提供：
+
+```text
+file
+class
+function
+signature
+type
+important relationship
+```
+
+当 Agent 需要函数正文时再 Read。
+
+Workbench 已经有 Tree-sitter / Symbol Index，因此可以自然增加：
+
+```text
+RepoContextMap
+```
+
+例如：
+
+```text
+Token Budget
+1,500
+
+Included
+src/runtime/router.rs
+  RuntimeRouter
+  route()
+
+src/runtime/adapter.rs
+  RuntimeAdapter
+  start_run()
+
+src/model/registry.rs
+  resolve_model()
+```
+
+而不是：
+
+```text
+把 48 个相关文件全文塞给 Codex
+```
+
+`RepoContextMap` 是 Projection，不是真源；真实代码仍由 Workspace 按需读取。
+
+---
+
+# 469. Progressive Context Read：先知道“在哪”，再决定“读多少”
+
+统一使用：
+
+```text
+Metadata
+  ↓
+Structure / Symbol / Outline
+  ↓
+Relevant Range
+  ↓
+Neighbor Context
+  ↓
+Full Resource only if justified
+```
+
+例如 4,000 行源码：
+
+```text
+第一步
+Symbol Map 300 tokens
+
+第二步
+目标 function 180 tokens
+
+第三步
+caller + type 420 tokens
+```
+
+而不是第一次就：
+
+```text
+4,000 lines → Context
+```
+
+PDF/日志/Conversation/Artifact 也采用同样策略。
+
+---
+
+# 470. Context Delta / Dedup：同一事实不应该每轮重复付费
+
+已经进入 Stable Prefix 的内容，不在 Dynamic Context 再复制一次。
+
+同一个 `ResourceRevision/contentHash` 在同一 Turn 中只 materialize 一次。
+
+例如：
+
+```text
+Project Baseline
+已经包含 D-412
+
+Task Retrieval
+又选中 D-412
+```
+
+最终 Context Manifest：
+
+```text
+D-412
+source = BASELINE
+repeat = DROPPED_DUPLICATE
+```
+
+Room / Mission 同理：
+
+```text
+Mission Base
++
+Task Delta
++
+Handoff Delta
++
+Room Delta
+```
+不是每次重新附带完整 Mission/Room 历史。
+
+---
+
+# 471. Conversation History 使用 Condensed View，但原始 Event Log 永远保留
+
+长对话需要压缩，但不能把历史真源改写成模型摘要。
+
+架构：
+
+```text
+Append-only Conversation Events
+            │
+            ├── Raw History Truth
+            │
+            └── Context View
+                 Recent Turns
+                 Checkpoint Facts
+                 Work Capsule
+                 older condensed blocks
+```
+
+OpenHands 的 Context Condenser 值得借鉴的是这种“Agent 使用 condensed history view，而 raw events 仍然独立存在”的分层思想。
+
+首版优先使用确定性 condensation：
+
+```text
+已形成的 DecisionRef
+TaskRef
+ArtifactRef
+completed action
+superseded turn
+repeated tool log
+```
+
+都可以从对话正文中折叠成引用。
+
+只有历史确实需要语义摘要、而且现有结构化对象仍不足时，才允许当前主 Agent 在已有调用中产生 `ConversationCheckpointSummary`；不启动专用 summarizer model。
+
+---
+
+# 472. Tool / Skill Schema 也要进入 Token Budget
+
+之前已经定义：
+
+```text
+Installed Skills
+≠
+Current Exposed Skills
+```
+
+现在同样扩展到 Tool Schema：
+
+```text
+Available Control Tools        86
+Exposed This Turn               9
+Likely Needed                   4
+Invoked                         2
+```
+
+例如普通聊天不需要发送：
+
+```text
+mission.cancel
+workspace.rollback
+plugin.install
+admin.model.disable
+...
+```
+
+几十个 JSON Schema。
+
+Tool Exposure Planner 根据当前 Intent 只暴露最小集合。
+
+这不仅减少 Token，也降低模型选错 Tool 的概率。
+
+---
+
+# 473. Agent-to-Agent 通信默认使用结构化短包，而不是长篇互相解释
+
+AUTO TEAM 中真正容易放大 Token 的地方之一是：
+
+```text
+Agent A 输出 4,000 tokens
+↓
+Agent B 再读 4,000
+↓
+Agent B 输出 5,000
+↓
+Reviewer 再读 9,000
+```
+
+因此 Worker/Handoff 默认应该：
+
+```text
+TaskContract
+DecisionRefs
+ArtifactRefs
+ChangeSetRef
+ResultSummary
+OpenQuestions
+EvidenceRefs
+```
+
+而不是复制整段自然语言 reasoning。
+
+例如：
+
+```text
+HANDOFF RESULT
+status: IMPLEMENTED
+changeSet: C-82
+tests: A-91
+openIssues: 1
+needReview: security
+```
+
+Reviewer 再按需打开 ChangeSet/Test Artifact。
+
+这样 Agent 越多，Token 不会线性复制所有历史文本。
+
+---
+
+# 474. Output Budget：不仅压输入，也控制 Agent 自己“说太多”
+
+内部 Agent-to-Agent Turn 默认：
+
+```text
+Structured / Concise
+```
+
+不要求每个 Worker 都写一篇完整报告。
+
+按任务设置：
+
+```text
+Output Budget
+
+FAST RESULT       small
+NORMAL            medium
+REPORT             large
+USER EXPLANATION   user-facing
+```
+
+如果 Runtime/Model 支持：
+
+```text
+max output tokens
+reasoning effort / equivalent control
+```
+
+可以由 Runtime Adapter 在不破坏用户显式选择的前提下配置。
+
+但不要简单地把所有输出上限压到很低；代码 patch、结构化 Artifact、失败诊断等必须允许合理增长。
+
+---
+
+# 475. Token-aware Provider Admission：用 Token Lease，而不是只数请求
+
+Provider Traffic Controller 增加：
+
+```text
+TokenLease
+```
+
+Turn 开始前估算：
+
+```text
+Input Estimate
+Output Reservation
+Cacheable Prefix
+Context Class
+```
+
+例如：
+
+```text
+Task A
+8K input + 2K output
+weight 1
+
+Task B
+72K input + 8K output
+weight 5
+```
+
+如果 Provider 正接近 TPM 压力：
+
+```text
+优先释放多个小 Critical Task
+而不是同时启动多个 80K long-context Turn
+```
+
+因此 Token Reduction 会直接反馈到：
+
+```text
+更低 Capacity Weight
+→ 更快 Admission
+→ 更少 429
+→ 更高有效并行度
+```
+
+这正是 Token 优化与 v0.37.1 Rate-limit-aware Parallelism 的连接点。
+
+---
+
+# 476. TokenReceipt / Context Efficiency Metrics
+
+每个 Turn 形成：
+
+```text
+TokenReceipt
+```
+
+示例：
+
+```text
+Agent
+Coding Agent
+
+Input Estimate Before Optimization
+48.2K
+
+Final Input
+17.6K
+
+Breakdown
+Stable Prefix        4.2K
+Task + Handoff       2.1K
+Repo Map             1.4K
+Code Ranges          5.0K
+Tool Results         3.1K
+Other                1.8K
+
+Dropped / Collapsed
+Duplicate            5.4K
+Raw Tool Noise      13.8K
+Unrelated File       7.2K
+Old Conversation     4.2K
+
+Output
+1.8K
+
+Raw Evidence Preserved
+YES
+```
+
+注意 UI 不应宣称“节省 64% 账单”除非 Provider 实际 Usage 能证明；默认只报告：
+
+```text
+context tokens reduced / avoided
+```
+
+并把最终 Provider Usage 作为真实计费证据。
+
+---
+
+# 477. Token Optimization 不得破坏 Cache Affinity
+
+有些“每轮都重新改写 Prompt”的压缩方案会让 Provider Prefix Cache 失效，反而更贵。
+
+因此优先级：
+
+```text
+Stable Prefix 保持稳定
+      ↓
+Dynamic Context 做裁剪
+      ↓
+Tool Output 做 Projection
+      ↓
+只有必要时才重新生成语义摘要
+```
+
+同一个 Agent 的：
+
+```text
+Agent Definition
+Core Memory revision
+stable Skill/Tool definitions
+Project Baseline revision
+```
+
+只在真实 Revision 改变时更新。
+
+Token Optimization 的目标不是“字越少越好”，而是：
+
+> 在保持正确性、可追溯性和 cache reuse 的情况下，消除低信息密度 Token。
+
+---
+
+# 478. Token Optimization Open-source Integration Policy
+
+建议首轮技术 Spike：
+
+```text
+Aider Repo Map
+  → 借鉴 AST/graph-rank/token-budget context
+
+RTK
+  → 评估 Rust command-aware ToolOutput filter
+
+chop
+  → 参考 hook/output filtering rule set
+
+context-compress
+  → 参考 raw-output indexed retention + compact context
+
+OpenHands Condenser
+  → 参考 raw history / condensed view separation
+
+LLMLingua
+  → 仅未来实验，不进 No-extra-model baseline
+```
+
+优先“借鉴算法/输出规则/架构”，不直接把 Workbench 核心依赖绑定到任一项目。
+
+所有第三方 filter 必须进入 Integration Registry、版本锁定、许可证检查、故障 fallback 和真实 Benchmark。
+
+---
+
+# 479. v0.38 Decision Log Part A — Token-efficient Agent Execution
+
+## D-459 — Token Pressure Is a First-class Provider Capacity Dimension
+
+**决定：** Provider Admission 不只计算请求并发，还必须考虑预计 Input/Output Token、长 Context 和真实 Usage；Token 优化直接参与限流与并行控制。  
+**状态：** Accepted
+
+## D-460 — Default Token Optimization Uses No Additional AI Model
+
+**决定：** 首版采用确定性 Context/Output 裁剪、索引、AST、引用、去重和预算，不默认引入 Prompt Compression/Summarizer/Embedding/Reranker 模型。  
+**状态：** Accepted
+
+## D-461 — Raw Tool Evidence Is Preserved; Only the Context Projection Is Compressed
+
+**决定：** Shell/Test/Git 等完整输出保留为可追溯 Run Evidence；Agent 默认只接收经过 ToolOutputProjection 的高信号摘要与 ResourceRef，需要时再按范围读取原始输出。  
+**状态：** Accepted
+
+## D-462 — Critical Failure and Change Signals Cannot Be Filtered Away
+
+**决定：** Error/Failed/Security/Compiler diagnostics/Diff changes/Exit status 等建立保留规则；无法安全压缩时回退 Conservative/Raw。  
+**状态：** Accepted
+
+## D-463 — Repository Context Uses Token-budgeted Structural Maps Before Full-file Reads
+
+**决定：** 代码场景借鉴 Aider Repo Map：Symbol/AST/关系排序 + token budget 提供结构地图，再按需读取正文。  
+**状态：** Accepted
+
+## D-464 — Context Uses Base + Delta + Ref + Dedup Rather Than Repeated Full History
+
+**决定：** Mission/Room/Conversation/Handoff/Project Context 优先传稳定 Base、增量 Delta 和 ResourceRef；相同 revision/hash 在同一 Context 中去重。  
+**状态：** Accepted
+
+## D-465 — Tool and Skill Schemas Have an Exposure Budget
+
+**决定：** Available Tool/Skill 与本轮暴露给模型的 Active Set 分离，Intent-based Exposure 降低 Schema Token 和误调用概率。  
+**状态：** Accepted
+
+## D-466 — Agent-to-Agent Communication Is Structured and Evidence-linked by Default
+
+**决定：** 多 Agent Handoff 默认使用 TaskContract/ResultSummary/ArtifactRef/ChangeSetRef 等短结构包，不复制完整对话或长报告；独立 Review 可显式重新读取原始 Evidence。  
+**状态：** Accepted
+
+## D-467 — Output Tokens Are Budgeted by Task Type
+
+**决定：** 内部 Worker/Agent Turn 默认 concise/structured，并按任务配置 Output Budget；用户报告、复杂 Artifact 和诊断允许更高输出，不实施全局粗暴截断。  
+**状态：** Accepted
+
+## D-468 — TokenLease Integrates with Provider Traffic Controller
+
+**决定：** Turn Admission 建立 Input/Output Token Reservation 并在实际 Usage 后对账；大 Context Turn 具有更高 capacity weight，Token 减少可直接提高安全并行度。  
+**状态：** Accepted
+
+## D-469 — Token Savings Are Measured, Not Assumed
+
+**决定：** TokenReceipt 区分“Context 避免量”和“Provider 实际 Usage”；第三方声称的 60–90% 等只作为其项目 benchmark，不转换成 Workbench 的账单节省承诺。  
+**状态：** Accepted
+
+---
+
+# 480. 下一层：Tauri Window 不能再等于 Workbench Execution Lifetime
+
+到目前为止 AUTO TEAM 已经具备：
+
+```text
+Durable Mission
+Crash Recovery
+Provider Retry / Capacity Control
+Token Pressure Control
+```
+
+下一步必须解决：
+
+> 用户把桌面窗口关掉之后，这些 Mission 到底还活不活？
+
+如果 Scheduler、Runtime Supervisor、TransferJob 都绑在 Tauri Window 生命周期上：
+
+```text
+关闭窗口
+↓
+Rust Host 退出
+↓
+Codex/DeepSeek 被 kill
+↓
+Mission 中断
+```
+
+那么“交给 AI 团队自己跑几个小时”实际上不可用。
+
+因此建议正式拆为：
+
+```text
+Workbench Desktop UI
+        ↕ IPC
+Workbench Service / Daemon
+        │
+        ├── Scheduler
+        ├── Mission Coordinator
+        ├── Recovery Coordinator
+        ├── Provider Traffic Controller
+        ├── Token Pressure Controller
+        ├── Runtime Supervisor
+        ├── Transfer Manager
+        ├── Event Store Writer
+        └── Notification Projection
+```
+
+Tauri/React UI 成为 Control Client，不再拥有核心 Mission 生命周期。
+
+---
+
+# 481. Linux 首版使用 User-level Workbench Service，不做 Root System Daemon
+
+首版建议：
+
+```text
+workbench-ui
+workbenchd
+```
+
+`workbenchd` 属于当前登录用户：
+
+- 不要求 root；
+- 不作为系统所有用户共享的 Agent daemon；
+- 使用当前用户的 Workspace、Credential refs、Runtime 配置；
+- 文件权限继续是操作系统用户权限 + DeepSeek/Codex 原生 Sandbox/Approval。
+
+Linux 可优先研究 `systemd --user` 管理，或者由 Desktop 启动并守护 user daemon；不要为了后台运行引入一个 root service。
+
+Tauri v2 官方已经提供 Linux 的 autostart 和 system tray 能力，可用于桌面启动/托盘体验，但真正 Mission 执行仍建议由独立 `workbenchd` 持有，而不是“把 Tauri Window 隐藏起来当 Daemon”。
+
+---
+
+# 482. Window Close / Quit / Stop Service 必须是三种不同语义
+
+以后不能只有一个模糊的 `X`。
+
+建议：
+
+```text
+Close Window
+→ UI 关闭
+→ Active Mission 继续
+→ Tray / Notification 保留
+
+Quit Desktop UI
+→ UI 退出
+→ workbenchd 是否继续取决于 Background Policy
+
+Stop Workbench Service
+→ 停止新 Admission
+→ Checkpoint / Pause active Mission
+→ 关闭 Runtime
+→ service exit
+```
+
+第一次存在 Active Mission 时关闭窗口，可以提示一次：
+
+```text
+2 Missions are still running.
+
+● Keep running in background
+○ Pause missions and stop service
+
+[Remember my choice]
+```
+
+以后按用户设置执行，不每次弹窗。
+
+---
+
+# 483. Background Policy
+
+建议用户级配置：
+
+```text
+Background Mission Policy
+
+KEEP_RUNNING_WHILE_LOGGED_IN   default
+PAUSE_WHEN_UI_EXITS
+ASK_WHEN_ACTIVE
+```
+
+首版不承诺：
+
+```text
+机器关机仍继续
+机器睡眠仍继续
+用户退出登录后仍继续
+```
+
+如果 Workstation 处于睡眠：
+
+```text
+CPU/Network 停止
+→ Mission 实际暂停
+```
+
+Wake 后再恢复。
+
+将来如果确实需要“用户注销后仍运行”，可以再研究 Linux user lingering / headless server mode，但不作为桌面首版默认行为。
+
+---
+
+# 484. UI 和 Daemon 使用本地 IPC，不通过数据库轮询互相猜状态
+
+Linux 优先：
+
+```text
+Unix Domain Socket
+```
+
+Windows 后续：
+
+```text
+Named Pipe / equivalent local IPC
+```
+
+通信：
+
+```text
+Command
+Query
+Event Subscription
+Snapshot
+Reconnect Cursor
+```
+
+例如：
+
+```text
+UI
+subscribe(project/P1)
+     ↓
+Daemon
+     ↓
+ProjectControlProjection events
+```
+
+UI 崩溃重开：
+
+```text
+connect
+↓
+get current snapshot
+↓
+resume from event cursor
+```
+
+不需要重启正在工作的 Agent。
+
+---
+
+# 485. Daemon 成为 Runtime Process Supervisor
+
+DeepSeek Harness / Codex Harness 进程由 `workbenchd` 监督：
+
+```text
+workbenchd
+    │
+    ├── DeepSeek Process A
+    ├── Codex Process B
+    └── Codex Process C
+```
+
+Tauri UI 关闭不触发 Runtime kill。
+
+`workbenchd` 重启则走 v0.37：
+
+```text
+Boot Recovery Sweep
+↓
+probe existing runtime
+↓
+reattach / resume / rebind / reconcile
+```
+
+因此：
+
+```text
+UI Crash
+≠ Runtime Crash
+
+Runtime Crash
+≠ Mission Loss
+
+Daemon Crash
+≠ Durable State Loss
+```
+
+三层故障隔离。
+
+---
+
+# 486. Suspend / Sleep：暂停 Admission，不承诺完成正在飞行的请求
+
+系统准备休眠时：
+
+```text
+SUSPEND_PREPARE
+     ↓
+Stop new remote admissions
+Persist event/checkpoints
+Persist Transfer ranges
+Mark in-flight calls
+Flush critical DB writes
+```
+
+不能保证系统 suspend 前所有 cloud turn 都优雅结束。
+
+Wake 后：
+
+```text
+WAKE
+ ↓
+Network revalidation
+Provider cooldown / health probe
+Runtime probe
+In-flight turn reconciliation
+Transfer resume
+Scheduler resume
+```
+
+如果 suspend 发生在 Tool Side Effect 之后、response 之前：
+
+```text
+UNCERTAIN_EFFECT
+→ RECONCILING
+```
+
+继续使用 v0.37 的安全规则，不能把 Wake 简化成“所有 Running 全部 Retry”。
+
+---
+
+# 487. Network Offline 是等待状态，不是 Mission Failure
+
+新增/统一：
+
+```text
+WAITING_NETWORK
+```
+
+离线时仍可做的本地工作：
+
+```text
+Workspace browsing
+FTS search
+Parser/index
+Git local inspection
+UI/project state
+local transfer within available storage
+```
+
+需要云模型的 Agent Turn：
+
+```text
+WAITING_NETWORK
+```
+
+网络回来：
+
+```text
+Provider Traffic Controller
+渐进恢复 admission
+```
+
+不能所有 Task 同时苏醒制造 burst。
+
+---
+
+# 488. System Tray 是后台运行的“轻控制面”，不是另一个 Dashboard
+
+Tray 建议只保留：
+
+```text
+Workbench
+2 Missions Running
+1 Needs Attention
+
+[Open Workbench]
+[Pause All Missions]
+[Resume]
+[Quit / Stop Service]
+```
+
+不要在 Tray 里复制完整 Project Control Center。
+
+Tauri v2 有官方 system tray API，可用于 Linux/Windows 桌面这一层。
+
+---
+
+# 489. Notification Policy：只通知真正值得打断用户的事情
+
+默认通知：
+
+```text
+Mission Completed
+Mission Blocked requiring user
+Native Runtime Approval waiting
+Quota/Auth fatal issue
+Conflict requiring human
+Recovery failed after budget exhausted
+```
+
+默认不通知：
+
+```text
+普通 429
+一次 502
+一个 Task 开始
+每个 Agent 完成一个小步骤
+一次自动 Retry
+```
+
+这些进入 Timeline / Project Projection 即可。
+
+通知点击可以用 Deep Link 打开：
+
+```text
+workbench://mission/M82
+workbench://attention/A19
+```
+
+Tauri v2 当前提供跨桌面/Android 的 deep-link 支持，可作为未来统一跳转机制的技术候选。
+
+---
+
+# 490. Autostart 与 Mission Auto-resume 分开
+
+三个概念不要混：
+
+```text
+Start UI at login
+Start workbenchd at login
+Resume paused/recoverable Missions at service start
+```
+
+它们应分别配置。
+
+例如用户可以：
+
+```text
+Daemon Autostart       ON
+Desktop Window         OFF
+Resume Missions        ON
+```
+
+登录以后后台继续上次 Mission，但不强制弹出窗口。
+
+Tauri v2 官方 autostart 插件支持 Linux，可用于 UI 或 service bootstrap；但 Mission 是否恢复仍由 Workbench Durable Policy 决定，不能由“应用自动启动”隐式决定。
+
+---
+
+# 491. Android Companion 不运行完整 DeepSeek/Codex Harness
+
+继续坚持之前的方向：Android 是 Companion / Remote Control Client。
+
+Android 主要查看：
+
+```text
+Projects
+Missions
+Agent/Task status
+Attention
+Costs
+Workspace change summary
+Review status
+Notifications
+```
+
+主要控制：
+
+```text
+Pause / Resume Mission
+Send message to Personal Agent / Room
+Dispatch Task
+Acknowledge Attention
+Request Stop
+Open artifact/summary
+```
+
+手机不负责：
+
+```text
+本地运行完整 Codex Harness
+本地运行 DeepSeek Harness
+挂载 Linux Workspace
+直接执行 shell
+```
+
+真正执行继续留在 Linux/Windows Workbench Host。
+
+---
+
+# 492. Android 不应该默认从公网直接暴露本机 Daemon
+
+不要：
+
+```text
+Phone
+↓ Internet
+直接开放家里/公司 PC 的 workbenchd port
+```
+
+首选未来架构：
+
+```text
+Android Companion
+       │
+       │ authenticated control channel
+       ▼
+Workbench Relay / Sync Service
+       │
+       ▼
+Desktop workbenchd outbound connection
+```
+
+Relay 保存的优先是：
+
+```text
+Project/Mission compact projections
+Attention
+Notification envelopes
+RemoteCommand queue
+```
+
+而不是默认镜像整个 Workspace 或 Private Memory。
+
+Desktop 主动建立 outbound secure connection，避免要求用户配置公网端口/NAT。
+
+---
+
+# 493. RemoteCommand 也必须走 Workbench Control Tools
+
+Android 发：
+
+```text
+Resume Runtime Mission
+```
+
+实际形成：
+
+```text
+RemoteCommandEnvelope
+    ↓
+authenticated user
+    ↓
+Workbench Control API
+    ↓
+mission.resume
+    ↓
+CommandReceipt
+```
+
+不能给 Android 一个：
+
+```text
+remote_shell.execute
+```
+
+更不能绕过 DeepSeek/Codex native approval。
+
+未来如果支持在手机上处理 Runtime Approval，也只是：
+
+```text
+显示原生 Approval projection
+↓
+用户明确决定
+↓
+转发到原 Harness approval request
+```
+
+不重新发明权限引擎。
+
+---
+
+# 494. Remote State 使用 Compact Projection，不同步完整 Event Store
+
+Android 不需要下载：
+
+```text
+100 万 Events
+全部 Conversation
+全部 Workspace metadata
+Agent Private Memory
+```
+
+只同步：
+
+```text
+ProjectControlProjection
+MissionCompactProjection
+AttentionProjection
+AgentPresenceProjection
+UsageProjection
+Recent Timeline Window
+```
+
+用户点进某个对象再按需请求详情。
+
+这会使移动端同步、网络和存储成本都保持很低。
+
+---
+
+# 495. v0.38 Decision Log Part B — Background Workbench Service / Companion
+
+## D-470 — UI Lifetime Is Decoupled from Mission Execution Lifetime
+
+**决定：** Tauri Window/UI 不拥有 Mission/Scheduler/Runtime 生命周期；持久执行由独立 user-level Workbench Service/Daemon 承担。  
+**状态：** Accepted
+
+## D-471 — Linux Uses a User-level Service, Not a Root Daemon
+
+**决定：** Linux 首版 `workbenchd` 运行于当前用户身份，可研究 systemd --user；不要求 root，不建立系统所有用户共享的 Agent service。  
+**状态：** Accepted
+
+## D-472 — Close Window, Quit UI, and Stop Service Have Different Semantics
+
+**决定：** Close 默认可保持 active Mission 后台运行；停止 Workbench Service 才会停止新 Admission 并 checkpoint/pause Mission。行为可由用户 Background Policy 配置。  
+**状态：** Accepted
+
+## D-473 — workbenchd Owns Scheduler, Runtime Supervision, Recovery and Traffic Control
+
+**决定：** Scheduler、Mission/Recovery Coordinator、Provider/Token Traffic Control、Runtime Supervisor、TransferJob 与 Event Store writer 归 daemon；UI 仅通过 IPC 控制/订阅。  
+**状态：** Accepted
+
+## D-474 — Desktop UI Communicates with Daemon Through Local Evented IPC
+
+**决定：** Linux 首选 Unix Domain Socket，Windows 后续使用对应本地 IPC；支持 Command/Query/Snapshot/Event Cursor，不以数据库轮询代替进程间状态协议。  
+**状态：** Accepted
+
+## D-475 — Suspend/Wake Uses Checkpoint + Reconciliation, Not Blind Retry
+
+**决定：** suspend 前停止新 admission 并尽力持久化；wake 后重新检测网络、Provider、Runtime 和 in-flight effect，状态不确定时进入 Reconciliation。  
+**状态：** Accepted
+
+## D-476 — Offline Cloud Work Waits Without Marking Mission Failed
+
+**决定：** 网络离线使用 WAITING_NETWORK；可继续本地确定性工作，云模型 Turn 等网络恢复后渐进重新 admission。  
+**状态：** Accepted
+
+## D-477 — Tray and Notifications Are Compact Attention Surfaces
+
+**决定：** Tray 仅显示 active/attention 和少量控制；通知只用于完成、阻塞、approval、fatal quota/auth/conflict/recovery exhausted，不通知普通 Retry/429。  
+**状态：** Accepted
+
+## D-478 — Autostart and Auto-resume Are Separate Policies
+
+**决定：** UI 启动、daemon 启动和 Mission 自动恢复分别配置，启动程序不等于自动恢复所有任务。  
+**状态：** Accepted
+
+## D-479 — Android Is a Companion / Remote Control Client, Not a Harness Host
+
+**决定：** Android 不运行完整 DeepSeek/Codex Harness 或 Desktop Workspace execution；主要消费 compact projections、Attention 和 Control Commands。  
+**状态：** Accepted
+
+## D-480 — Remote Companion Does Not Expose workbenchd Directly to the Public Internet by Default
+
+**决定：** 未来远程控制优先采用 Desktop outbound secure channel + Relay/Sync Service；不要求本机开放公网端口，Relay 默认不复制完整 Workspace/Private Memory。  
+**状态：** Accepted
+
+## D-481 — Remote Commands Reuse Workbench Control Tools and Receipts
+
+**决定：** Android 的 pause/resume/dispatch 等操作走相同强类型 Workbench Control API 并生成 CommandReceipt；禁止 Remote Shell shortcut，也不绕过 Harness native approval。  
+**状态：** Accepted
+
+## D-482 — Mobile Sync Uses Compact Projections and On-demand Detail
+
+**决定：** Android 默认同步 Project/Mission/Attention/Usage/Recent Timeline 等 compact projection，不复制完整 Event Store/Conversation/Agent Private Memory。  
+**状态：** Accepted
+
+---
+
+# 496. Background Service Idle Must Mean Zero Model Spend
+
+`workbenchd` 常驻不等于 Agent 常驻调用模型。
+
+空闲时只允许本地事件驱动工作：
+
+```textIPC
+file watcher
+scheduled transfer checkpoint
+provider/network health metadata
+projection maintenance
+notification delivery
+```
+
+默认禁止为了“保持 Agent 在线”而：
+
+```text
+定时调用 DeepSeek/Codex
+LLM heartbeat
+周期性总结 Conversation
+周期性刷新 Memory
+周期性询问 Mission 是否完成
+prompt-cache keepalive request
+```
+
+Mission 状态来自 Task Graph / Event Store / Runtime events；Android/Tray 查询状态直接读取 compact projection，不临时调用主 Agent 生成状态摘要。
+
+只有真实用户输入、Ready Task、明确自动化触发或恢复流程需要 Agent 推理时，才创建新的模型 Turn。
+
+## D-483 — Idle Background Service Has Zero Default LLM Traffic
+
+**决定：** `workbenchd` 常驻时默认不产生任何 DeepSeek/Codex heartbeat、定时总结或 cache-keepalive 模型调用；状态查询使用持久 Projection。只有明确 Work/Turn/Automation/Recovery 触发才消耗模型 Token。  
+**状态：** Accepted
+
+---
+
+# 497. Attention 是持久工作对象，Notification 只是投影
+
+随着 AUTO TEAM、后台 `workbenchd`、Android Companion 和远程控制加入，不能再把“需要用户处理”实现成零散的桌面弹窗。
+
+统一定义：
+
+```text
+AttentionItem
+= 一件仍需要用户/管理员明确处理、确认或知晓的工作状态
+```
+
+而：
+
+```text
+Desktop Notification
+Tray Badge
+Android Push
+Project Needs You
+Room Banner
+```
+
+都只是 `AttentionItem` 的不同投影/送达渠道。
+
+因此即使用户错过通知、关闭窗口或换设备，真正的 Attention 仍然存在于 Workbench durable truth 中。
+
+通知不能成为真源，也不能用“通知已经发送”代表“用户已经处理”。
+
+---
+
+# 498. AttentionItem 结构
+
+建议核心字段：
+
+```text
+AttentionItem
+
+attentionId
+sourceType
+sourceRef
+projectRef
+missionRef?
+taskRef?
+runRef?
+agentRef?
+
+category
+severity
+blockingScope
+
+status
+createdAt
+updatedAt
+expiresAt?
+
+summary
+structuredDetailsRef
+
+availableActions[]
+recommendedAction?
+
+nativeRequestRef?
+runEpoch?
+expectedRevision?
+
+dedupeKey
+coalesceGroup?
+```
+
+`status` 至少：
+
+```text
+OPEN
+ACKNOWLEDGED
+RESOLVED
+EXPIRED
+SUPERSEDED
+DISMISSED
+```
+
+其中 `ACKNOWLEDGED` 只表示用户已经看见，不等于问题已经解决。
+
+---
+
+# 499. Attention 的阻塞范围必须是局部的
+
+一个 Approval 或 Conflict 不应该默认暂停整个 Mission。
+
+定义：
+
+```text
+blockingScope =
+NONE
+RUN
+TASK
+BRANCH
+MISSION
+PROJECT
+```
+
+例如：
+
+```text
+Coding Agent
+需要 Codex native approval
+```
+
+正确行为：
+
+```text
+Coding Task
+WAITING_APPROVAL
+
+Dependent Tasks
+WAITING_DEPENDENCY
+
+Independent Test Fixture Task
+仍可 RUNNING
+
+Independent Research Task
+仍可 RUNNING
+```
+
+只有当该 Attention 位于 Mission Critical Path 且没有其他 Ready Work，用户才感觉整个 Mission 在等待。
+
+这避免“一个 Agent 等确认，整个十人团队一起停工”。
+
+---
+
+# 500. 不同异常的默认 Attention 处理语义
+
+建议默认规则：
+
+```text
+普通 429 / Retry / Backoff
+→ 不创建用户 Attention
+→ WAITING_RATE_LIMIT
+
+短暂 502/503/504
+→ 不创建用户 Attention
+→ Recovery / Retry Controller 自动处理
+
+Codex / DeepSeek Native Approval
+→ 创建 Attention
+→ 只阻塞对应 Run/Task Branch
+
+Review CHANGES_REQUESTED
+→ 通常创建 Mission 内部 Repair Task
+→ 不一定通知用户
+
+Review BLOCKED / Critical Finding
+→ 创建 Attention
+→ 阻塞 Merge / Promotion Gate
+
+Merge / Workspace Conflict
+→ 创建 Attention
+→ 阻塞受影响 Workspace Branch
+
+Soft Budget Threshold
+→ 可通知但默认不阻塞
+
+Hard Budget Cap
+→ 阻止新的模型 Admission
+→ 创建 Attention
+
+Provider Quota Exhausted / Auth Invalid
+→ 创建 Attention
+→ Auto 模式可尝试允许的 fallback；Pinned 模式等待用户
+
+Mission Ambiguity / Human Decision Required
+→ 创建 Attention
+→ 只阻塞依赖该决定的 Branch
+```
+
+目标是：
+
+> 自动恢复的问题不骚扰用户；真正需要人的问题才进入 Attention。
+
+---
+
+# 501. Notification Priority 与 Attention Severity 分离
+
+`Attention severity` 表示业务风险；`notification priority` 表示是否值得打断用户。
+
+例如一个 High Review Finding 可能非常重要，但如果 Reviewer 正在自动 Repair，它暂时不需要给手机推送。
+
+建议通知等级：
+
+```text
+N0 SILENT
+只进入 Inbox / Projection
+
+N1 BADGE
+桌面/手机 badge，不弹出
+
+N2 NOTIFY
+普通系统通知
+
+N3 URGENT
+声音/震动/高优先级，可按用户策略绕过普通 Quiet Hours
+```
+
+典型：
+
+```text
+Mission Completed
+→ N1/N2
+
+Native Approval blocking Critical Path
+→ N2
+
+Quota Exhausted
+→ N2
+
+Security-sensitive live Approval approaching expiry
+→ N3（用户明确允许时）
+
+429 retry
+→ N0，不建立 Attention
+```
+
+---
+
+# 502. Notification Router：桌面在线时不要重复轰炸手机
+
+新增：
+
+```text
+Notification Router
+```
+
+根据：
+
+```text
+User Presence
+Desktop Focus
+Android Active State
+Attention Priority
+Quiet Hours
+Notification Preference
+Previous Delivery
+```
+
+决定送达渠道。
+
+例如用户当前正在桌面端查看同一个 Mission：
+
+```text
+In-app Attention ✓
+Tray badge ✓
+Android Push ✕
+```
+
+用户离开电脑：
+
+```text
+Android Push ✓
+Desktop Notification optional
+```
+
+避免同一个事件同时：
+
+```text
+弹窗
+Tray
+手机震动
+Email
+```
+
+四次打扰。
+
+---
+
+# 503. 通知必须去重、聚合和限流
+
+多 Agent 并行时可能在 30 秒内产生：
+
+```text
+Test failed × 12
+Review finding × 8
+Recovery × 5
+```
+
+不能发 25 条通知。
+
+使用：
+
+```text
+dedupeKey
+coalesceGroup
+cooldownWindow
+```
+
+例如：
+
+```text
+Runtime v2 needs attention
+
+1 native approval
+2 blocked tasks
+1 merge conflict
+```
+
+只发一条聚合通知。
+
+更新已有 Attention/Notification，而不是继续创建新消息。
+
+对于恢复中的瞬态错误设置 Notification Flood Breaker；短时间内相同 Provider/Task 类问题只保留状态变化，不重复提醒。
+
+---
+
+# 504. Quiet Hours 不改变任务真源
+
+用户可以配置：
+
+```text
+Quiet Hours
+23:00 - 08:00
+```
+
+这只改变通知送达，不改变 Scheduler 状态。
+
+例如 Mission 在凌晨需要 Approval：
+
+```text
+Task
+WAITING_APPROVAL
+```
+
+仍然是真实状态。
+
+Quiet Hours 可以：
+
+```text
+Suppress Push
+Delay non-urgent delivery
+Badge only
+```
+
+但不能：
+
+```text
+自动批准
+自动拒绝
+假装任务继续完成
+```
+
+对于用户明确允许的高优先级安全/到期请求，可单独设置“允许紧急通知突破 Quiet Hours”。
+
+---
+
+# 505. Android Remote Approval 的核心原则：只转发一个仍然存活的原生请求
+
+未来手机端可以处理 DeepSeek/Codex native approval，但必须明确：
+
+```text
+Android
+不是新的 Permission Engine
+```
+
+完整路径：
+
+```text
+Codex / DeepSeek Harness
+        ↓
+Native Approval Request
+        ↓
+Runtime Adapter
+        ↓
+AttentionItem
+        ↓
+Workbench Relay
+        ↓
+Android Companion
+        ↓
+用户明确 Approve / Deny
+        ↓
+RemoteDecisionEnvelope
+        ↓
+workbenchd validation
+        ↓
+原 Runtime Adapter
+        ↓
+原 Native Approval Request
+        ↓
+Harness confirms result
+        ↓
+Attention RESOLVED
+```
+
+因此手机只是远程显示与转发用户决定。
+
+---
+
+# 506. Remote Approval 必须绑定精确请求，不允许模糊批准
+
+`RemoteDecisionEnvelope` 至少绑定：
+
+```text
+attentionId
+nativeRequestId
+runId
+runEpoch
+taskRef
+runtimeBindingRef
+decision = APPROVE | DENY
+expectedRevision
+issuedAt
+expiresAt
+deviceId
+nonce
+```
+
+`workbenchd` 收到后必须检查：
+
+```text
+Attention 仍 OPEN？
+Native Request 仍 active？
+Run Epoch 仍一致？
+RuntimeBinding 没换？
+Request 没过期？
+Expected Revision 仍一致？
+Device/user authorization 有效？
+```
+
+任一不满足：
+
+```text
+REJECTED_STALE
+```
+
+不能把旧手机通知上的“批准”应用到新的一次命令。
+
+---
+
+# 507. Native Approval 不允许离线盲排队
+
+这是一个重要安全边界。
+
+如果手机点击 Approve 时 Desktop/Relay 无法确认原生 request 仍存在：
+
+```text
+不能显示：Approved
+```
+
+更不能把一个审批决定无限期排在队列里，等电脑两小时后上线时再自动执行。
+
+正确状态：
+
+```text
+Unable to confirm live request
+Approval not submitted
+```
+
+用户重新连接后查看当前 Attention。
+
+原因是原 Harness Session、Run Epoch、命令内容都可能已经变化。
+
+普通的：
+
+```text
+mission.pause
+mission.resume
+dispatch.send
+```
+
+可以按策略使用带 TTL + `expectedRevision` 的 RemoteCommand Queue；Native Approval 不采用这种盲排队模式。
+
+---
+
+# 508. 高风险 Remote Approval 应显示原始关键内容，而不是 AI 摘要替代事实
+
+例如 Codex 原生请求：
+
+```text
+Run command:
+rm -rf build/cache
+```
+
+手机上可以提供：
+
+```text
+AI summary:
+“清理构建缓存”
+```
+
+但必须同时可查看原始 Native Request 的关键字段：
+
+```text
+Exact command
+Working directory
+Target resource
+Runtime
+Agent
+Task
+Reason / native metadata
+```
+
+不能只显示：
+
+> “Coding Agent 需要一个权限，是否允许？”
+
+高风险远程批准可配置：
+
+```text
+Require device biometric/PIN confirmation
+```
+
+这是远程客户端身份确认，不改变 Harness 自身 Permission Policy。
+
+---
+
+# 509. Android Companion 的 Action Surface 采用白名单
+
+首版推荐允许：
+
+```text
+查看 Project / Mission / Room / Agent compact state
+查看 Attention
+Acknowledgement
+Pause Mission
+Resume Mission
+Cancel Pending Mission/Task（按 Control API 语义）
+给 Personal Agent 发消息
+@Room / @Agent Dispatch
+处理支持远程转发的 live native approval
+处理简单 Review/Decision Attention
+```
+
+默认不提供：
+
+```text
+Remote arbitrary shell
+直接编辑 Workspace 文件
+读取 Agent Private Memory 数据库
+修改 Provider API Key
+安装永久 Plugin
+执行未建模的任意 admin command
+```
+
+后者如果未来增加，也必须走专门的强类型 Control Tool，而不是开放 Remote Shell。
+
+---
+
+# 510. RemoteCommand 有自己的 durable 状态
+
+普通远程控制定义：
+
+```text
+CREATED
+SENT
+RECEIVED
+VALIDATING
+ACCEPTED
+COMMITTED
+REJECTED
+EXPIRED
+CANCELLED
+```
+
+手机点击：
+
+```text
+Resume Mission
+```
+
+不能立刻把 UI 改成：
+
+```text
+Mission Running
+```
+
+而是：
+
+```text
+Command Sent
+      ↓
+Daemon COMMITTED
+      ↓
+Mission Projection = RUNNING
+```
+
+这样移动端不会把“按钮按下了”误认为“电脑已经执行成功”。
+
+---
+
+# 511. Relay 只保存最小必要远程状态
+
+Relay 不应该成为新的 Workbench Server Truth。
+
+首选只保存/转发：
+
+```text
+Encrypted/opaque NotificationEnvelope
+Compact Projection revisions
+Attention metadata
+RemoteCommand envelopes
+Device/session metadata
+```
+
+不默认同步：
+
+```text
+完整 Agent Private Memory
+整个 Workspace
+全部 Conversation
+完整 Event Store
+API Key
+Harness credential
+```
+
+对于需要在 Android 查看敏感 Approval detail 的场景，目标是使用设备绑定的加密通道/加密 payload，使 Relay 尽可能只承担传输与离线通知职责，而不是成为可读取项目秘密的中心数据库。
+
+具体协议在实现阶段做独立 Threat Model 和技术 Spike。
+
+---
+
+# 512. Attention 可以在主聊天里自然处理
+
+因为 Personal Primary Agent 已经是 Personal Command Surface，用户也可以在主聊天说：
+
+```text
+现在有什么需要我处理？
+```
+
+My Agent 调用：
+
+```text
+workbench.attention.list
+```
+
+直接基于 Projection 回答，例如：
+
+```text
+Runtime v2
+1 个 Codex approval
+
+Video Mission
+1 个预算 hard-cap
+```
+
+用户说：
+
+```text
+先暂停视频任务，Runtime 的那个审批给我看一下。
+```
+
+则调用 Control Tools。
+
+但是展示 Attention 状态不需要先调用模型生成新的项目摘要；结构化事实直接读取即可。
+
+---
+
+# 513. Attention Template 默认不调用模型生成通知文案
+
+为了避免后台通知本身产生 Token：
+
+```text
+AttentionItem
+        ↓
+Deterministic Template
+        ↓
+NotificationEnvelope
+```
+
+例如：
+
+```text
+Runtime v2 needs approval
+Coding Agent · Codex
+Task: Implement Router
+```
+
+无需：
+
+```text
+调用 My Agent
+“请帮我把这个事件总结成通知”
+```
+
+如果用户进入主聊天后要求解释：
+
+> “这个审批为什么出现？”
+
+再由 Agent 读取相关 Receipt/Task/Runtime evidence 进行解释。
+
+---
+
+# 514. 等待用户时 AUTO TEAM 继续做安全的独立工作
+
+Mission Scheduler 新增：
+
+```text
+Attention-aware Scheduling
+```
+
+例如：
+
+```text
+T4 Code Write
+WAITING_APPROVAL
+
+T5 Documentation
+independent
+
+T6 Test Fixture
+independent
+```
+
+则：
+
+```text
+T5 RUN
+T6 RUN
+```
+
+而不是整个 Mission `PAUSED`。
+
+只有：
+
+```text
+没有其他 Ready Task
+或 Attention blockingScope = MISSION/PROJECT
+```
+
+才进入整体 Waiting。
+
+这对用户离开电脑后的自动化非常重要：一个待审批点不会浪费所有其他可做工作。
+
+---
+
+# 515. Approval 超时默认安全停止受影响动作，不自动批准
+
+如果 native approval 自身过期，或 Remote Approval deadline 到达：
+
+```text
+Attention
+→ EXPIRED
+```
+
+受影响 Run 根据 Harness 原生行为进入：
+
+```text
+WAITING / CANCELLED / REJECTED
+```
+
+Workbench 可以创建新的 Task/Run 或让 Agent提出下一方案，但不能：
+
+```text
+“为了不阻塞 Mission，自动 Approve”
+```
+
+也不能把一个旧 Approval 复制到新 RuntimeBinding。
+
+---
+
+# 516. Android 离线缓存必须明确标记 Stale
+
+移动端可以缓存最后一次：
+
+```text
+ProjectControlProjection rev 82
+MissionCompactProjection rev 218
+```
+
+断网时仍然允许浏览，但顶部明确：
+
+```text
+Offline
+Last synced 12:31
+```
+
+所有运行状态不得假装是实时值。
+
+高风险控制按钮在无法建立可信实时通道时禁用；普通可排队 Command 需要显式显示：
+
+```text
+Pending delivery
+```
+
+直到收到 daemon `COMMITTED` Receipt。
+
+---
+
+# 517. Notification / Push Provider 必须可替换
+
+定义：
+
+```text
+NotificationProvider
+```
+
+桌面端：
+
+```text
+Tauri/Desktop native notification
+```
+
+Android 未来可以支持不同路径：
+
+```text
+Hosted Push Provider
+Self-hosted Push Provider
+UnifiedPush-compatible Provider
+```
+
+Workbench 业务层只生成：
+
+```text
+NotificationEnvelope
+```
+
+不绑定某一家推送服务。
+
+开源研究参考：
+
+- **Gotify**：自托管 server 使用 REST 发送、WebSocket 实时接收，提供 Android 客户端，Server 与 Android 项目均为 MIT，可参考轻量 Push Relay / 客户端结构；
+- **ntfy**：简单 HTTP pub/sub 通知服务，提供 Android/iOS/Web 与自托管路径，可参考 topic / push / self-hosted 通知设计；其项目存在 Apache-2.0 / GPLv2 双许可证组合，实际复用必须单独做许可证确认；
+- **UnifiedPush**：Android 的开放、可替换 push 协议，可作为未来不强绑定 FCM 的 Provider 接口参考。
+
+首版不要求直接 fork 或嵌入任一项目；优先借鉴协议、客户端与自托管思路。
+
+---
+
+# 518. 手机通知不能泄露敏感内容
+
+锁屏通知默认只显示：
+
+```text
+Workbench needs your attention
+Runtime v2 · Approval required
+```
+
+不默认显示：
+
+```text
+完整 shell command
+私有文件名
+代码片段
+用户 Memory
+Credential
+Prompt 内容
+```
+
+用户解锁并进入 Companion 后，再通过授权通道加载完整 Attention detail。
+
+可提供设置：
+
+```text
+Notification Preview
+Minimal
+Normal
+Detailed
+```
+
+其中高敏项目管理员可以强制 `Minimal`。
+
+---
+
+# 519. AttentionReceipt 记录人的介入链路
+
+每个处理结果都生成：
+
+```text
+AttentionReceipt
+
+attentionId
+sourceRef
+openedAt?
+acknowledgedAt?
+resolvedAt?
+resolvedBy
+resolvedFromDevice
+selectedAction
+commandReceiptRef?
+nativeApprovalReceiptRef?
+previousStatus
+finalStatus
+```
+
+例如：
+
+```text
+Attention A-82
+Codex Approval
+
+Delivered
+Android
+
+Resolved By
+User
+
+Action
+APPROVE
+
+Harness Result
+ACCEPTED
+```
+
+这样 Glass Box / Audit 可以回答：
+
+> 这个危险操作是谁在什么设备上批准的？
+
+同时不会暴露隐藏 chain-of-thought。
+
+---
+
+# 520. v0.39 Decision Log — Attention / Remote Approval / Android Interaction
+
+## D-484 — Attention Is Durable Truth; Notification Is Delivery Projection
+
+**决定：** 需要用户处理的事项统一建模为持久 `AttentionItem`；Desktop Notification、Tray、Android Push、Project Needs You 都只是投影，通知送达不等于问题已处理。  
+**状态：** Accepted
+
+## D-485 — Attention Blocks the Minimum Necessary Scope
+
+**决定：** Attention 使用 RUN/TASK/BRANCH/MISSION/PROJECT 阻塞范围；一个 Approval/Conflict 默认只暂停依赖分支，Scheduler 继续执行安全且独立的 Ready Tasks。  
+**状态：** Accepted
+
+## D-486 — Transient Provider Events Do Not Become User Attention by Default
+
+**决定：** 普通 429、Retry、短暂 5xx、自动 Recovery 不通知用户；只有自动机制无法解决、Quota/Auth/Fatal 或真正需要人工决定时才创建 Attention。  
+**状态：** Accepted
+
+## D-487 — Attention Severity and Notification Priority Are Separate
+
+**决定：** 业务风险等级与打断用户的通知优先级分离；能够自动 Repair 的高风险事件可以暂时静默，而阻塞 Critical Path 的 live approval 可以提高通知优先级。  
+**状态：** Accepted
+
+## D-488 — Notification Delivery Is Presence-aware, Deduplicated and Coalesced
+
+**决定：** Notification Router 根据桌面/移动端 Presence、Quiet Hours 和已有送达记录选择渠道；相同 Mission/故障使用 dedupe/coalescing/cooldown，禁止多 Agent 通知风暴。  
+**状态：** Accepted
+
+## D-489 — Quiet Hours Affect Delivery, Not Scheduler Truth
+
+**决定：** Quiet Hours 只抑制/延迟通知，不自动批准、拒绝、改变 Task 状态或假装 Mission 继续；紧急突破需要用户显式策略。  
+**状态：** Accepted
+
+## D-490 — Android Remote Approval Only For a Live Native Harness Request
+
+**决定：** Android 可远程转发用户对 DeepSeek/Codex native approval 的明确决定，但必须绑定仍存活的原请求；Android/Relay 不成为 Permission Engine。  
+**状态：** Accepted
+
+## D-491 — Remote Approval Is Bound to NativeRequest + Run Epoch + RuntimeBinding
+
+**决定：** RemoteDecisionEnvelope 必须包含 nativeRequestId、runId/runEpoch、runtimeBinding、expectedRevision、expiry、nonce/device identity；任何 stale/mismatched request 必须拒绝。  
+**状态：** Accepted
+
+## D-492 — Native Approval Is Never Blindly Queued Offline
+
+**决定：** 手机无法实时验证原 request 时不能把 Approve/Deny 作为离线命令长期排队；重新连线后必须读取当前 Attention。普通 pause/resume 等 Control Command 可使用 TTL + revision queue。  
+**状态：** Accepted
+
+## D-493 — High-risk Remote Approval Shows Native Evidence
+
+**决定：** 远程高风险审批必须允许用户查看实际 native command/resource/runtime/task 等关键事实，AI 摘要只能辅助，不能替代原始请求；可配置设备 biometric/PIN 二次确认。  
+**状态：** Accepted
+
+## D-494 — Mobile Actions Use a Strict Workbench Control Tool Allowlist
+
+**决定：** Android 首版允许 compact state、Attention、pause/resume、dispatch 和受策略允许的 live approval；禁止 Remote Shell、任意文件写入、读取他人/Agent 私有 Memory DB、凭证修改等快捷入口。  
+**状态：** Accepted
+
+## D-495 — Remote Commands Are Receipt-driven, Not Optimistically Final
+
+**决定：** 移动端命令具有 CREATED→SENT→RECEIVED→VALIDATING→ACCEPTED→COMMITTED/REJECTED/EXPIRED 状态；按钮点击不等于桌面已执行，最终以 daemon CommandReceipt 和新 Projection 为准。  
+**状态：** Accepted
+
+## D-496 — Relay Stores Minimum Remote State and Is Not Product Truth
+**决定：** Relay 仅保存/转发 compact projection、Attention/Notification/RemoteCommand envelope 与设备元数据；不默认复制 Workspace、完整 Event Store、Conversation、API Key 或 Agent Private Memory。敏感 detail 的远程查看目标采用设备绑定加密通道。  
+**状态：** Accepted
+
+## D-497 — Attention Notification Text Is Deterministic by Default
+
+**决定：** 后台通知由结构化 Attention + Template 生成，不为通知文案额外调用 DeepSeek/Codex；用户要求解释时才由当前主 Agent 读取事实生成说明。  
+**状态：** Accepted
+
+## D-498 — Approval Expiry Never Auto-approves
+
+**决定：** Native/Remote Approval 过期后安全停止受影响动作或遵循 Harness 原生拒绝/取消语义；Workbench 不为保持 AUTO TEAM 连续运行而自动批准。  
+**状态：** Accepted
+
+## D-499 — Android Offline State Is Explicitly Stale
+
+**决定：** Android 可缓存最后一次 compact projection，但离线时必须显示最后同步时间；高风险实时操作禁用，排队 Control Command 显示 Pending，直到 daemon commit。  
+**状态：** Accepted
+
+## D-500 — Notification Provider Is Pluggable
+
+**决定：** Workbench 业务层只产生 NotificationEnvelope；桌面原生通知与 Android Push 通过 `NotificationProvider` 适配。Gotify、ntfy、UnifiedPush 作为开源/开放研究参考，不直接成为 Workbench 状态真源。  
+**状态：** Accepted
+
+## D-501 — Lock-screen Notification Defaults to Minimal Sensitive Detail
+
+**决定：** 手机锁屏通知默认不暴露 shell command、私有文件名、代码、Memory 或 credential；解锁进入 Companion 后再加载授权详情，可按项目强制 Minimal Preview。  
+**状态：** Accepted
+
+## D-502 — Human Intervention Is Auditable Through AttentionReceipt
+
+**决定：** Attention 的查看、确认、解决来源、设备、动作以及关联 CommandReceipt/native approval receipt 进入 `AttentionReceipt`；用户介入链可追踪但不暴露模型隐藏推理。  
+**状态：** Accepted
+
+## D-503 — AUTO TEAM Continues Safe Independent Work While Waiting for Humans
+
+**决定：** Scheduler 必须理解 Attention dependency；等待用户时继续执行与该 Attention 无依赖且安全的 Task，只有无可执行工作或阻塞范围提升到 MISSION/PROJECT 时才整体等待。  
+**状态：** Accepted
+
+
+---
+
+# 521. v0.39.1 Correction — Linux-first Attention / Parked Human Wait
+
+这一修正不撤销 Attention / Remote Approval 的长期接口设计，而是明确产品阶段与等待语义：**Linux 桌面端先把“等人”做可靠；Android 与 Relay 后置。**
+
+## 521.1 用户两小时没处理 Approval 时，Agent 不应该持续“思考”
+
+典型流程：
+
+```text
+Codex / DeepSeek
+    ↓
+Native Approval Request
+    ↓
+AttentionItem OPEN
+    ↓
+Task = WAITING_APPROVAL
+    ↓
+短暂保持 RuntimeBinding（若成本/资源允许）
+    ↓
+超过等待窗口或 Session 不适合长期保持
+    ↓
+PARKED_WAITING_FOR_USER
+```
+
+`PARKED_WAITING_FOR_USER` 的含义是：
+
+```text
+模型调用        0
+LLM heartbeat   0
+自动总结        0
+“还在等吗”轮询 0
+```
+
+Workbench 只保留本地 durable state、Attention、Task dependency、RuntimeBinding 元数据、Workspace evidence 与 Recovery Capsule。
+
+因此在以 Token 计费的 DeepSeek/Codex 云 API 路径下，**等待用户本身不持续产生 Token 费用**。可能仍有本地 daemon / Runtime 进程的少量 RAM/CPU 占用；若未来接入按 wall-clock/session/hosted-compute 计费的 Provider，则由 Provider Billing Profile 触发更积极的 Park 策略，不能假设所有供应商“等待免费”。
+
+## 521.2 不需要让整个 Mission 等两小时
+
+Attention 继续遵守最小阻塞范围：
+
+```text
+Coding Task      WAITING_APPROVAL
+Reviewer         WAITING_DEPENDENCY
+Research         RUNNING
+Test Fixture     RUNNING
+Independent Task RUNNING
+```
+
+只有当 Critical Path 已无其他 READY Task 时，Mission 才显示 `WAITING_FOR_USER`。这表示“当前没有安全可继续的工作”，不是 Agent 在后台持续调用模型等待。
+
+## 521.3 Attention 可以长期存在，但 Native Approval 不一定长期有效
+
+必须区分：
+
+```text
+AttentionItem
+= Workbench durable truth
+
+Native Approval Request
+= DeepSeek/Codex 当前 RuntimeBinding 中的瞬时请求
+```
+
+两小时后可能出现三种情况：
+
+```text
+A. Native Request 仍存活
+   → Revalidate
+   → 用户处理原请求
+
+B. RuntimeBinding 可恢复，但原 Request 已过期
+   → 原 Attention 标记 REQUEST_EXPIRED
+   → 恢复 Task / Runtime
+   → Harness 重新产生新的 native approval
+   → 用户处理新请求
+
+C. Session/Thread 已不可恢复
+   → Recovery Capsule
+   → New RuntimeBinding
+   → Reconcile Workspace Side Effect
+   → 恢复到需要审批的安全点
+   → 产生新的 native approval（如仍需要）
+```
+
+旧手机通知、旧桌面按钮或旧 `nativeRequestId` 永远不能批准新请求。
+
+## 521.4 建议引入 Approval Wait Lifecycle
+
+```text
+WAITING_APPROVAL_ACTIVE
+    ↓
+WAITING_APPROVAL_IDLE
+    ↓
+PARKED_WAITING_FOR_USER
+    ↓
+REVALIDATING_APPROVAL
+    ↓
+RUNNING / REQUEST_EXPIRED / CANCELLED
+```
+
+具体等待多久进入 Park 不写死为产品真理，由 Provider/Runtime/Profile 决定；Linux 首版可先使用保守默认值并允许配置。原则是：**短等待优先快速恢复，长等待优先释放昂贵或脆弱的 Runtime 资源。**
+
+## 521.5 Linux MVP 的 Attention 范围
+
+Linux 第一阶段必须完成：
+
+```text
+Durable AttentionItem
+Project Needs You / Attention Inbox
+Desktop native notification
+Tray badge / running state
+WAITING_APPROVAL / PARKED_WAITING_FOR_USER
+Approval revalidation / expiry
+Mission branch-local blocking
+Recovery after app/daemon/machine restart
+AttentionReceipt
+```
+
+第一阶段明确不要求：
+
+```text
+Android App
+Public Relay
+Mobile Push Backend
+Device Pairing
+Remote Native Approval
+Remote Shell
+Cross-device command queue
+```
+
+但 Domain Model 与接口不要写死为 Desktop-only，以免未来 Android 加入时重构 Attention 真源。
+
+# 522. Future Android Staging — Interface Now, Product Later
+
+Android 采用分阶段实现，而不是 Linux MVP 同时开发：
+
+```text
+Phase A — Linux only
+Attention + Tray + local notification + Park/Resume
+
+Phase B — Android read-only companion
+Compact Project/Mission state + notifications
+
+Phase C — Safe remote control
+Pause / Resume / Dispatch / Attention acknowledgement
+
+Phase D — Live native approval
+严格绑定当前 DeepSeek/Codex native request
+```
+
+这样可以先验证最核心的 Agent/Mission/Workspace/Harness 能力，而不提前承担账号体系、Relay、设备身份、Push、远程安全和移动端 UI 的巨大实现成本。
+
+接口层只需预留：
+
+```text
+AttentionProjectionProvider
+NotificationProvider
+RemoteProjectionEnvelope
+RemoteCommandEnvelope   # Future
+NativeApprovalBridge    # Future
+```
+
+其中后两项在 Linux MVP 可以没有具体 Provider 实现。
+
+# 523. Token / Cost Semantics of Human Wait
+
+Workbench 需要在 Usage/Glass Box 中把“等待”与“模型执行”严格分开：
+
+```text
+MODEL_ACTIVE
+→ 可能产生 input/output token
+
+TOOL_ACTIVE
+→ 可能产生本地/外部工具成本
+
+WAITING_APPROVAL
+→ 默认 0 model token
+
+PARKED_WAITING_FOR_USER
+→ 0 model token
+
+WAITING_RATE_LIMIT
+→ 0 model token during backoff
+
+WAITING_DEPENDENCY
+→ 0 model token
+```
+
+UI 可以显示：
+
+```text
+Coding Agent
+Waiting for approval · 1h 52m
+Token cost while waiting: 0
+```
+
+如果某个未来 Provider 存在 session/minute/compute 占用费用，则显示该 Provider 的非 Token 成本，而不能混入 Token Usage。
+
+# 524. v0.39.1 Decision Log — Linux-first / Parked Approval
+
+## D-504 — Human Wait Is a Parkable State, Not an Agent Turn
+
+**决定：** `WAITING_APPROVAL` / `PARKED_WAITING_FOR_USER` 不运行 LLM heartbeat、轮询或自动总结；等待人本身不构成 Agent Turn。
+**状态：** Accepted
+
+## D-505 — Token-billed Providers Consume Zero Model Tokens While Parked
+
+**决定：** 对按输入/输出 Token 计费的 DeepSeek/Codex 云模型，Park 等待阶段不得产生模型调用；未来若 Provider 存在 wall-clock/session/compute 费用，单独记录并据其 Billing Profile 决定是否提前释放 Runtime。
+**状态：** Accepted
+
+## D-506 — Durable Attention Outlives Native Approval Requests
+
+**决定：** AttentionItem 可以长期 OPEN，但 native approval 可过期或随 RuntimeBinding 消失；用户回来时先 revalidate，过期请求必须重新生成，旧决定永远不能套用到新请求。
+**状态：** Accepted
+
+## D-507 — Linux MVP Implements Attention Core; Android Is Deferred
+
+**决定：** Linux 第一阶段实现 durable Attention、desktop/tray notification、branch-local blocking、Park/Resume、expiry/revalidation 与 recovery；Android、Relay、device pairing、mobile push 和 remote native approval 不进入 Linux MVP。
+**状态：** Accepted
+
+## D-508 — Android Rolls Out Read-only Before Remote Approval
+
+**决定：** Android 未来先做 compact state + notification，再加入普通 remote command，最后才加入 live DeepSeek/Codex native approval；远程审批不作为 Android 首版前置条件。
+**状态：** Accepted
+
+## D-509 — Attention Interfaces Are Cross-device-ready Without Requiring a Relay Implementation
+
+**决定：** Attention/Notification 数据模型保持 transport-neutral，并预留 remote projection/command bridge；Linux MVP 可只有本地 Provider，禁止为了未来 Android 提前建设完整账号/Relay/Push 基础设施。
+**状态：** Accepted
+
+# 525. Linux `workbenchd` — User-level Durable Service, Not a GUI Child Process
+
+Linux 第一阶段正式采用：
+
+```text
+Tauri Desktop UI
+      │
+      │ Unix Domain Socket / versioned local IPC
+      ▼
+workbenchd  (user service)
+      │
+      ├── Durable Scheduler
+      ├── Recovery Coordinator
+      ├── Provider Traffic / Token Controller
+      ├── Attention / Projection Engine
+      ├── Transfer / Background Jobs
+      └── Runtime Supervisor
+              │
+              ├── DeepSeek Harness Adapter
+              └── Codex Harness Adapter
+```
+
+`workbenchd` 默认作为当前 Linux 用户的 user service 运行，不要求 root。Tauri Window 的关闭、崩溃或重启不得等价于 Mission 终止。
+
+本地 IPC 默认优先 Unix Domain Socket，而不是开放 localhost HTTP 端口。Socket 目录/文件必须限定当前用户访问，并在可用平台上验证 peer credential；协议必须带版本协商，避免 UI 与 Daemon 升级错位后继续发送不兼容命令。
+
+# 526. Runtime Process Model Is Adapter-declared
+
+Workbench 不写死：
+
+```text
+1 Agent = 1 Process
+```
+
+也不写死：
+
+```text
+All Agents share one Runtime server
+```
+
+每个 RuntimeAdapter 必须声明自身 Process Model，例如：
+
+```text
+MULTI_SESSION_SERVER
+SINGLE_SESSION_PROCESS
+APP_SERVER
+CLI_CHILD
+EXTERNAL_MANAGED
+```
+
+Workbench 统一管理 `RuntimeBinding`，但具体一个 Binding 是否复用已有进程、建立新 session/thread、还是新建 child process，由 Adapter 根据实际 Harness 能力决定。
+
+因此：
+
+```text
+Agent Identity != RuntimeBinding != OS Process
+```
+
+同一个 Agent 可以在不同 Conversation / Room 有独立 Binding；多个 Binding 也可能由同一个支持多 session 的 Harness server 托管。
+
+# 527. Runtime Process Lifecycle
+
+统一产品级进程状态建议：
+
+```text
+STOPPED
+STARTING
+READY
+BUSY
+IDLE
+DRAINING
+PARKING
+PARKED
+DEGRADED
+CRASHED
+QUARANTINED
+STOPPING
+```
+
+这些是 Workbench 对运行资源的投影，不替代 DeepSeek/Codex 自己的内部状态。
+
+核心原则：
+
+```text
+Task PARKED
+!=
+Runtime process must remain alive
+```
+
+如果 native session 可以以后 resume，长时间 `WAITING_APPROVAL` / `WAITING_RATE_LIMIT` / `WAITING_DEPENDENCY` 可以释放 Runtime process；任务、Attention、RuntimeBinding metadata 和 Recovery Capsule 仍由 Workbench 保存。
+
+# 528. ProcessLease and Run Fencing
+
+Runtime Supervisor 为真正执行中的 Runtime/Run 建立 `ProcessLease`：
+
+```text
+ProcessLease
+- process_id / pid
+- runtime_id
+- binding_id
+- run_id
+- run_epoch
+- started_at
+- last_native_event_at
+- ownership_state
+- resource_budget_ref
+```
+
+`run_epoch` 与 v0.37 的 fencing 一致。旧进程在被新 Binding 替换后，即使晚到发送完成事件，也只能进入 Late Evidence，不允许直接推进当前 Run。
+
+如果 Harness 创建 native subagent/worker，Adapter 应尽量把其 process/session lineage 关联回父 Run，避免出现“孤儿 worker”无法清理。
+
+# 529. Warm Runtime Pool Is Bounded and Optional
+
+为了减少每次启动 Runtime 的冷启动延迟，可以有有限的 Warm/Idle Runtime，但不能无限常驻：
+
+```text
+Warm Runtime Pool
+- max warm processes
+- max idle memory
+- idle TTL
+- per-runtime cap
+- pressure eviction
+```
+
+默认优先级：
+
+```text
+ACTIVE critical-path Runtime
+  > ACTIVE normal Runtime
+  > recently used IDLE Runtime
+  > warm speculative Runtime
+```
+
+内存压力出现时首先停止 speculative / long-idle Runtime，再 park 可恢复的等待任务，最后才考虑暂停正常 Mission。
+
+严禁为了“秒开”常驻几十个 Codex/DeepSeek 进程。
+
+# 530. Linux Resource Budgets — CPU / RAM / PID / FD / Log
+
+Runtime Supervisor 不只控制模型 API 并发，还必须控制本机资源：
+
+```text
+CPU Budget
+RAM Budget
+Process / PID Budget
+Open File Descriptor Budget
+Child-process Budget
+Disk Log Budget
+Workspace Staging Budget
+Preview / Parser Budget
+```
+
+Linux 优先在可用环境利用 `systemd --user` / cgroup v2 用户 slice 做资源限制与统计；不支持时降级为 process group + rlimit/nice/OS metrics。资源治理不能要求 root 才能使用 Workbench。
+
+Resource Pressure 示例：
+
+```text
+NORMAL
+PRESSURED
+HIGH
+CRITICAL
+```
+
+在 `HIGH/CRITICAL` 时：
+
+```text
+1. 停止新的非关键 Admission
+2. 回收 idle/warm Runtime
+3. 收缩 Harness native subagent 并行
+4. 释放非必要 cache / preview worker
+5. Park 可安全恢复的低优先 Task
+6. 必要时向用户产生 Attention
+```
+
+不应直接随机 OOM-kill 一个正在产生 Workspace 副作用的 Runtime。
+
+# 531. Native Subagents Count Toward Local Resource Governance
+
+DeepSeek Harness / Codex Harness 自带的 native subagent 既占 Provider Token/请求容量，也占本机进程/内存/FD 等资源。
+
+如果 Harness 暴露：
+
+```text
+max_workers
+max_parallel
+worker_count
+```
+
+Adapter 应把 Provider Pressure 与 Local Resource Pressure 共同转成 native worker cap。
+
+如果内部 worker 完全不可观测，则 RuntimeProcessRecord 标记：
+
+```text
+OPAQUE_CHILDREN
+```
+
+并采用保守资源权重，而不是假设一个父进程只消耗一个任务槽。
+
+# 532. Crash-loop Containment
+
+Runtime 崩溃不能无限自动重启：
+
+```text
+crash
+→ backoff
+→ restart
+→ crash
+→ backoff
+→ ...
+```
+
+每个 Runtime/version 维护 crash window，例如：
+
+```text
+3 crashes / 10 min
+→ DEGRADED
+
+5 crashes / 10 min
+→ QUARANTINED
+```
+
+具体阈值进入配置与 Benchmark，不在架构阶段硬编码为 SLA。
+
+进入 `QUARANTINED` 后：
+
+```text
+- 停止新的 Binding
+- 保留现有 evidence / logs
+- 触发 Attention
+- 可回退 Last-Good Runtime version（若用户/管理员策略允许）
+```
+
+禁止 Crash Loop 在后台连续消耗 Provider Token、CPU 或磁盘日志。
+
+# 533. Runtime Update Uses Drain + Compatibility Probe + Last-Good
+
+DeepSeek/Codex CLI/Harness 更新可能改变协议、Session 行为或参数。
+
+更新流程：
+
+```text
+NEW VERSION AVAILABLE
+      ↓
+Mark runtime DRAINING
+      ↓
+No new long-lived bindings
+      ↓
+Active runs finish / checkpoint / park
+      ↓
+Install/update
+      ↓
+probe() + protocol/schema compatibility
+      ↓
+small smoke test
+      ↓
+READY
+```
+
+若 Probe/Smoke Test 失败：
+
+```text
+rollback / keep Last-Good
+```
+
+正在执行中的 Mission 不因为“有新版本”就被强制中断。
+
+# 534. Shutdown Is a Protocol, Not `kill -9`
+
+正常停止 `workbenchd` 应采用阶段式 Shutdown：
+
+```text
+STOP_NEW_ADMISSION
+      ↓
+DRAIN_SAFE_WORK
+      ↓
+CHECKPOINT
+      ↓
+PARK_RECOVERABLE_RUNS
+      ↓
+REQUEST_NATIVE_SHUTDOWN
+      ↓
+TERM process group
+      ↓
+KILL only after timeout / explicit force
+```
+
+如果 Runtime 正处于 `UNCERTAIN_EFFECT`，Shutdown 前必须保存 reconciliation requirement，重启后优先对账，而不是把它标成普通失败。
+
+# 535. Process Tree Ownership and Orphan Cleanup
+
+所有由 Workbench 启动的 DeepSeek/Codex Runtime 必须有可追踪 ownership：
+
+```text
+workbenchd
+  └── Runtime Process Group / Scope
+        ├── Harness
+        ├── native worker
+        └── child tool process (where observable)
+```
+
+Daemon 崩溃重启后进行 orphan sweep：
+
+```text
+- 找到仍带 Workbench ownership marker / scope 的进程
+- 对照 durable ProcessLease
+- 能 reattach → reattach
+- 无合法 lease → drain/terminate
+- 状态不确定 → quarantine + reconcile
+```
+
+禁止留下越来越多无法管理的 Codex/DeepSeek 孤儿进程。
+
+# 536. Runtime Logs — Raw Evidence + Bounded Storage
+
+日志需要区分：
+
+```text
+Product Event
+Runtime Structured Event
+stdout/stderr
+Tool Raw Output
+Diagnostic Trace
+```
+
+完整原始日志可以作为本地 evidence 保存，但必须：
+
+```text
+- rotate
+- size cap
+- TTL
+- per-run/per-runtime indexing
+- disk-pressure eviction
+- sensitive-field redaction where deterministic
+```
+
+UI 默认只显示结构化状态和关键事件；Glass Box / Developer Mode 才展开 stdout/stderr。
+
+不能把日志文件当作 Product State Truth，也不能因为 Debug 开启就无限写满磁盘。
+
+# 537. Health Checks Must Not Consume LLM Tokens
+
+Runtime 健康检查必须优先使用：
+
+```text
+OS child exit event
+IPC/socket state
+native ping/status endpoint
+adapter protocol probe
+provider HTTP health / last error
+```
+
+禁止使用：
+
+```text
+每 30 秒给 DeepSeek 发一句“还在吗？”
+每分钟让 Codex 回答一次 heartbeat
+```
+
+`workbenchd` idle 时继续遵守：
+
+```text
+0 LLM heartbeat token
+```
+
+# 538. Resource Pressure and Provider Pressure Are Combined at Admission
+
+Scheduler 的实际 Admission 由两类压力共同决定：
+
+```text
+Logical Task Parallelism
+        ∩
+Provider Capacity / Token Lease
+        ∩
+Local CPU/RAM/PID/FD Capacity
+        ∩
+Workspace Isolation Capacity
+        ↓
+Actual Runnable Set
+```
+
+所以即使 Provider 很空闲，如果本机 RAM 已经接近上限，新的 Harness worker 仍可进入：
+
+```text
+WAITING_LOCAL_CAPACITY
+```
+
+反之本机很空闲但 Provider 429，则进入：
+
+```text
+WAITING_RATE_LIMIT
+```
+
+两者不能混成同一个 `FAILED`。
+
+# 539. Runtime Supervisor Projection
+
+Project / Glass Box 可以展示：
+
+```text
+RUNTIME SUPERVISOR
+
+DeepSeek Harness
+READY
+Processes      2
+Active Runs    2
+Memory         1.3 GB
+Native Workers 3
+
+Codex Harness
+PRESSURED
+Processes      3
+Active Runs    2
+Parked         1
+Memory         2.1 GB
+
+Local Capacity
+RAM       5.7 / 16 GB
+Processes 21 / 96
+FD        Normal
+```
+
+普通用户只看：
+
+```text
+Healthy / Pressured / Recovering / Needs Attention
+```
+
+详细资源数据进入 Developer/Admin Glass Box。
+
+# 540. RuntimeProcessReceipt / Lifecycle Audit
+
+关键生命周期动作产生机器凭证：
+
+```text
+RuntimeProcessReceipt
+- runtime
+- version
+- process model
+- action START / REUSE / PARK / RESUME / DRAIN / STOP / QUARANTINE
+- binding refs
+- run refs
+- resource snapshot
+- trigger
+- result
+- timestamp
+```
+
+用户询问：
+
+```text
+为什么 Codex 刚才被重启？
+```
+
+系统应能基于 Receipt 回答：
+
+```text
+Crash loop / version update / memory pressure / explicit user action / recovery
+```
+
+而不是让模型猜。
+
+# 541. Linux Reliability Fault-injection Matrix
+
+Linux MVP 必须测试：
+
+```text
+kill Tauri UI only
+kill workbenchd
+kill DeepSeek Harness
+kill Codex Harness
+kill native subagent
+spawn excessive native workers
+force memory pressure
+exhaust FD limit
+fill log disk budget
+runtime update during active Mission
+runtime protocol mismatch
+orphan child process
+sleep/wake during active Run
+shutdown during WAITING_APPROVAL
+shutdown during UNCERTAIN_EFFECT
+```
+
+验收目标：
+
+```text
+UI crash does not corrupt Mission truth
+Daemon restart can reconstruct durable state
+No unbounded crash loop
+No unbounded process/log growth
+Old runtime cannot overwrite new epoch
+Waiting/Parked tasks do not consume LLM heartbeat token
+Active side effects are reconciled before retry
+Resource pressure degrades gracefully
+```
+
+# 542. v0.40 Decision Log — Linux workbenchd / Runtime Supervision
+
+## D-510 — Linux MVP Uses a User-level `workbenchd`
+
+**决定：** Tauri 是 UI，长期 Mission/Scheduler/Recovery/Runtime lifecycle 由当前用户级 `workbenchd` 托管；不要求 root daemon。
+**状态：** Accepted
+
+## D-511 — Runtime Process Model Is Declared by the Adapter
+
+**决定：** Workbench 不假定 Agent、RuntimeBinding 与 OS Process 一一对应；DeepSeek/Codex Adapter 声明 multi-session/server/single-process 等实际进程模型。
+**状态：** Accepted
+
+## D-512 — Parked Work Does Not Require a Live Runtime Process
+
+**决定：** `WAITING_APPROVAL`、长期限流或依赖等待可按 Adapter resume 能力释放 Runtime；Durable Task/Attention/Recovery Capsule 继续保留。
+**状态：** Accepted
+
+## D-513 — Local Resource Capacity Is a First-class Admission Constraint
+
+**决定：** CPU/RAM/PID/FD/日志/child-process 压力与 Provider/Token Pressure 一起决定实际并发；容量不足进入 WAITING_LOCAL_CAPACITY，不标记 Task FAILED。
+**状态：** Accepted
+
+## D-514 — Native Harness Subagents Consume Both Provider and Local Capacity
+
+**决定：** DeepSeek/Codex native subagent 必须纳入远程 Token/请求和本机进程资源预算；不可观测时按 OPAQUE_CHILDREN 使用保守权重。
+**状态：** Accepted
+
+## D-515 — Crash Loops Are Quarantined, Not Restarted Forever
+
+**决定：** Runtime crash loop 采用 backoff + bounded restart + QUARANTINED；禁止无限重启造成 Token、CPU 或日志风暴。
+**状态：** Accepted
+
+## D-516 — Runtime Updates Drain Active Work and Preserve Last-Good
+
+**决定：** Harness/CLI 更新使用 DRAIN → update → probe/smoke-test → READY；失败保持/回滚 Last-Good，不强制打断健康 Mission。
+**状态：** Accepted
+
+## D-517 — Normal Shutdown Is Drain/Checkpoint/Park Before Termination
+
+**决定：** `workbenchd` 正常停止不能直接 kill 活跃 Runtime；先停止 Admission、checkpoint、park/reconcile，再原生关闭/TERM，超时或用户明确 Force 才 KILL。
+**状态：** Accepted
+
+## D-518 — Runtime Health Checks Must Be Non-LLM
+
+**决定：** 健康检查使用 OS/IPC/native status/protocol probe，禁止用模型 heartbeat；Idle/Wait 继续保持 0 LLM token。
+**状态：** Accepted
+
+## D-519 — Runtime Logs Are Bounded Evidence, Not Product Truth
+
+**决定：** stdout/stderr/diagnostic/raw tool output 使用轮转、预算和 TTL；结构化 Event/Receipt 是 UI 与恢复依据，日志只作为 evidence/diagnostic。
+**状态：** Accepted
+
+## D-520 — Runtime Lifecycle Is Auditable Through `RuntimeProcessReceipt`
+
+**决定：** START/REUSE/PARK/RESUME/DRAIN/STOP/QUARANTINE 等关键动作留下 Receipt，以支持 Glass Box、恢复和故障解释。
+**状态：** Accepted
+
+# 543. v0.41.1 视觉风格校正：借鉴“构图与界面语言”，不锁定参考图颜色
+
+用户再次明确：提供的截图用于说明 **想要的产品视觉风格**，不是要求复制截图中的荧光黄绿、蓝色、洋红、深色背景或任何特定 Palette。此前把颜色解释为 Visual North Star 的一部分过度具体，现正式修正。
+
+参考截图继续作为 Linux Desktop 的 **Visual Style North Star**，但参考对象限定为以下“形式语言”：
+
+```text
+Agent Execution Stage / 执行现场感
++
+Editorial Control-console Composition / 编辑式控制台构图
++
+Dense but Hierarchical Information / 高密度但强层级
++
+Modular Multi-panel Layout / 模块化多面板
++
+Strong Typographic Contrast / 强字体层级与数字标记
++
+Technical Labels / Indexes / Status Signals / 技术标记、编号、状态信号
++
+Asymmetric Spatial Rhythm / 非完全对称、带节奏的空间布局
++
+Hard-edged / Cut-corner / Floating-label Details / 硬边、切角、悬浮标签等局部造型
++
+Live Operations / Broadcast / Technical Poster Character / 实时控制室、广播图形与技术海报气质
+```
+
+真正要保留的是用户看到截图时产生的这种感觉：
+
+> 这不是普通聊天软件，也不是传统企业 SaaS Dashboard，而像一个正在工作的 AI Agent 执行现场；信息很多，但用户能通过强分区、强视觉层级、编号、标签、状态信号和空间位置迅速知道“我在哪里、谁在工作、现在发生什么、下一步是什么”。
+
+因此 **颜色系统与 Style System 正式解耦**：
+
+```text
+STYLE SYSTEM
+= Layout / Geometry / Typography / Density / Motion / Panel Hierarchy / Labels / Status Composition
+
+THEME SYSTEM
+= Light/Dark / Background / Accent / Semantic Colors / Contrast Tokens
+```
+
+参考图中的颜色不成为硬编码规范。未来可以有：
+
+```text
+Dark Theme
+Light Theme
+High Contrast Theme
+Custom Accent Theme
+```
+
+只要仍保持同一套结构风格与信息层级，就属于同一个 Workbench Visual Language。
+
+## 543.1 页面构图语言
+
+主页面仍可使用参考图体现出的“多区域执行现场”结构，但不是机械复制四列：
+
+```text
+GLOBAL RAIL
+编号化主模块、强位置感、当前区块明显突出
+
+WORK / CONTEXT RAIL
+Project / Work / Conversation / Room 的工作索引和上下文切换
+
+MAIN STAGE
+Agent Conversation / Mission Flow / Workspace / Work Capsule
+是真正的视觉主舞台
+
+LIVE / INSPECTOR LAYER
+Runtime、Task、Attention、Cost、Provider Pressure、Review、Update
+作为执行现场的状态层
+```
+
+关键不是“左中右固定几列”，而是保持：
+
+```text
+主舞台最大
+导航有明显层级
+状态信息贴近当前工作
+次要信息可以折叠
+重要对象有强视觉锚点
+```
+
+Workspace、Mission Canvas、Memory Studio、Skill Studio 可以改变布局比例，但必须保持同一套视觉 DNA。
+
+## 543.2 Panel / Card 不做普通 SaaS 卡片
+
+避免把整个产品做成：
+
+```text
+圆角白卡片
+均匀 16px gap
+每块大小差不多
+图标 + 标题 + 一行说明
+```
+
+参考图真正有价值的是更强的编辑式层级：
+
+```text
+主 Panel 与次 Panel 尺度明显不同
+某些区域允许嵌套/叠层
+状态标签可以压在边缘或悬浮在 Panel 上
+允许局部切角、斜边、编号条、竖向标签
+大标题/编号与微型技术文字形成明显对比
+边框、分割线、微纹理用于组织空间，而不是装饰所有区域
+```
+
+这些造型必须服务于可读性和状态表达，不能为了“赛博感”增加无意义噪声。
+
+## 543.3 Typography / Label Language
+
+字体本身不复制参考项目，但排版语言可以借鉴：
+
+```text
+大号模块编号 / Section Index
+中号对象标题 / Agent / Mission / Work
+小号状态与技术元数据
+超小号可选诊断标签 / Runtime / Revision / Latency
+```
+
+允许适量使用：
+
+```text
+01 / 02 / 03
+LIVE
+RUNNING
+MISSION
+R-821
+AGENT / TASK / REVIEW
+```
+
+这种“技术索引 + 产品名称”的组合，帮助形成工作站而不是聊天 App 的视觉身份。
+
+## 543.4 Color / Background 只属于 Theme Tokens
+
+不再规定：
+
+```text
+荧光黄绿必须是 Primary
+蓝色必须表示 Runtime
+深黑必须是 Base Surface
+洋红必须是 Creative Accent
+```
+
+这些都只是参考截图的一种 Theme 实例。真正实现时只要求语义 Token：
+
+```text
+--surface-base
+--surface-raised
+--surface-stage
+--accent-primary
+--accent-secondary
+--state-running
+--state-waiting
+--state-attention
+--state-danger
+--state-success
+--border-strong
+--border-subtle
+--text-primary
+--text-secondary
+--text-micro
+```
+
+Theme 可以替换 Token 值，但状态语义和对比度必须保持稳定。
+
+## 543.5 Motion & Live-state Language
+
+参考图的另一个核心价值是“系统正在运行”的现场感，而不是某个具体动画颜色。Workbench 动效继续遵循：
+
+```text
+静态内容
+→ 基本静止
+
+Running / Streaming
+→ 细微状态 pulse / trace / incremental progress
+Waiting / Approval
+→ 克制的等待信号
+
+Critical Failure
+→ 明确但不大面积闪烁
+
+Mission topology change
+→ 节点/边增量过渡，不整张 Canvas 重绘
+```
+
+动画颜色来自 Theme Tokens；动画只表达真实运行状态，并服从低功耗、低 CPU 和 `prefers-reduced-motion`。
+
+## 543.6 UI 验收方式
+
+以后评审 UI 时，不问：
+
+```text
+“颜色像不像参考图？”
+```
+
+而问：
+
+```text
+1. 一眼是否像 AI 执行工作站，而不是普通聊天 App？
+2. 主工作舞台是否明显？
+3. 多信息并存时是否仍有清晰层级？
+4. Agent / Mission / Runtime / Attention 的状态是否具有现场感？
+5. 是否有参考图那种编辑式、技术控制台式的视觉节奏？
+6. 换成另一套颜色/Light Theme 后，风格是否仍然成立？
+```
+
+只有第 6 条成立，才说明我们真正借鉴的是“风格”，而不是把参考图的颜色抄过来。
+
+# 544. DeepSeek / Codex 更新风险不是“版本号变了”这么简单
+
+DeepSeek Harness 或 Codex Harness 升级后，真正可能变化的是 Workbench 与 Runtime 之间的 **契约**。可能发生：RPC/JSON 字段变化、事件名称变化、Session/Thread Resume 行为变化、Approval 语义变化、Sandbox/Permission 配置变化、CLI 参数变化、Native Subagent 行为变化、Tool Output 格式变化、Usage/Token 统计变化、429/5xx 错误结构变化、默认模型/Provider 行为变化，以及旧 RuntimeBinding 是否还能被新版本恢复。
+
+因此 Workbench 不能采用：
+
+```text
+发现新版本
+↓
+直接覆盖当前 binary
+↓
+重新启动
+↓
+希望一切正常
+```
+
+而必须有独立的 **Runtime Compatibility Gate**。
+
+# 545. Runtime Version Pin 与 Side-by-side Install
+
+Linux MVP 默认不采用“永远自动追最新版本”。每个 Runtime Installation 保存：
+
+```text
+RuntimeInstallation
+- runtimeType: DEEPSEEK | CODEX
+- version
+- binaryPath
+- installId
+- protocolFingerprint
+- capabilityFingerprint
+- configSchemaFingerprint
+- installedAt
+- compatibilityStatus
+- lastGood
+```
+
+推荐目录语义：
+
+```text
+~/.local/share/team-workbench/runtimes/
+  codex/
+    <version-A>/
+    <version-B>/
+  deepseek/
+    <version-A>/
+    <version-B>/
+```
+
+如果上游安装方式不允许 Workbench 托管 binary，也要在 Registry 中把“外部安装路径 + 版本”记录成一个不可变 Installation Snapshot。
+
+新版本先与旧版本并存。旧 Mission / Binding 在可行时继续由旧 Last-Good 版本 Drain；新版本通过兼容检查以后，只接收新的 Binding。这样避免为了升级一个 CLI，把正在运行几小时的 Mission 强制打断。
+
+# 546. Protocol / Capability Fingerprint
+
+`RuntimeAdapter.probe()` 不只返回 `version=...`，还必须形成：
+
+```text
+RuntimeCompatibilitySnapshot
+- runtimeVersion
+- protocolVersion / protocolFingerprint
+- stableMethods
+- eventTypes
+- approvalCapabilities
+- sessionCapabilities
+- nativeWorkerCapabilities
+- inputCapabilities
+- workspaceCapabilities
+- usageCapabilities
+- errorNormalizationCapabilities
+- configSchemaFingerprint
+- adapterVersion
+- testedAt
+```
+
+Workbench 判断兼容性依据的是该 Snapshot，而不是仅比较 SemVer。
+
+例如：
+
+```text
+Codex 0.x → 0.y
+```
+
+即使版本看起来只是小升级，如果 `turn/start`、Approval、Diff Event 或 Resume 契约发生变化，也可能进入：
+
+```text
+NEEDS_VALIDATION
+```
+
+而不是直接 READY。
+
+# 547. Codex：安装 binary 是协议真值，Stable API 优先
+
+Codex app-server 当前支持从实际安装 binary 生成 TypeScript / JSON Schema；生成结果与该 binary 版本匹配。Workbench 的 Codex Adapter 应利用这一点，在升级检查中记录 schema/protocol fingerprint，而不是长期手写一份“我们猜 Codex 永远长这样”的客户端协议。
+
+Linux MVP 默认只依赖 Codex **stable app-server surface**；需要显式 opt-in、且不承诺向后兼容的 experimental API 不进入核心功能基线。若以后确实采用 experimental capability，必须：
+
+```text
+Feature Flag
++
+Runtime Version Pin
++
+独立 Contract Test
++
+失败自动降级
+```
+
+不能让 Experimental API 的变化导致整个 Codex Adapter 失效。
+
+# 548. DeepSeek Harness：保持上游 RPC/Event 语义，但仍必须经过 Adapter Compatibility Gate
+
+Boujoy Harness 的一个重要参考点是：产品层不替换 DeepSeek Harness runtime，而是保持上游 WebSocket、事件帧与 RPC 语义，并在桌面层处理健康检查、Approval/Input 队列、过期请求与可恢复启动。
+
+Workbench 继续采用相同边界：DeepSeek Harness 是 Runtime Truth，Workbench 不 fork 一套私有协议。但“复用上游协议”不等于“可以假设上游永远不变”。DeepSeek Adapter 同样必须维护：
+
+```text
+supportedVersionRange
+protocolFingerprint
+capabilityProbe
+contractTests
+lastGoodInstallation
+```
+
+任何关键 RPC/Event/Approval 变化都先进入兼容检查，而不是让 UI 到运行时才随机报错。
+
+# 549. Runtime Contract Test Pack
+
+升级检查必须有一套 **不依赖真实项目数据、尽量零模型调用** 的 Contract Test Pack。
+
+基础测试覆盖：
+
+```text
+process start / initialize
+protocol handshake
+capability probe
+session/thread create
+safe session resume capability probe
+interrupt / cancel semantics
+approval request serialization
+approval stale/expiry handling
+tool event decoding
+diff/change event decoding
+usage/token event decoding
+429 / retryable overload error normalization
+fatal auth/quota error normalization
+native subagent capability declaration
+input/file capability declaration
+shutdown / drain
+```
+
+能够通过模拟事件、fixture 或 Runtime 自带无模型 RPC 完成的，不调用模型。
+
+如果某些能力必须真实模型 Turn 才能验证，使用 **Canary Test**，并设置非常小的 Token/Cost Budget；Canary 失败不会破坏当前 Last-Good。
+
+# 550. 更新事务：Stage → Probe → Canary → Drain → Activate
+
+Runtime 更新采用事务式生命周期：
+
+```text
+AVAILABLE_UPDATE
+      ↓
+STAGED
+      ↓
+PROBING
+      ↓
+COMPATIBILITY_TEST
+      ↓
+CANARY (optional)
+      ↓
+READY_FOR_ACTIVATION
+      ↓
+DRAIN_OLD
+      ↓
+ACTIVATE_NEW
+      ↓
+OBSERVE
+      ↓
+LAST_GOOD
+```
+
+任何阶段失败：
+
+```text
+new version
+→ INCOMPATIBLE / QUARANTINED
+
+old version
+→ stays LAST_GOOD
+```
+
+Workbench 不允许活跃 Mission 在没有 checkpoint / park / native resume 保障时被原地升级。
+
+# 551. Runtime Compatibility Status
+
+建议统一状态：
+
+```text
+UNKNOWN
+PROBING
+COMPATIBLE
+COMPATIBLE_DEGRADED
+NEEDS_MIGRATION
+INCOMPATIBLE
+QUARANTINED
+LAST_GOOD
+```
+
+`COMPATIBLE_DEGRADED` 很重要。例如新 Codex 基本聊天与代码执行正常，但 native subagent API 暂时解析失败，则：
+
+```text
+Direct Agent Turn       ✓
+Single-task coding      ✓
+Native parallel worker  ✕
+```
+
+Workbench 可以继续提供安全子集，而不是把整个 Runtime 判死。
+
+# 552. Capability Regression 必须影响 UI 和 Scheduler
+
+如果升级后某能力消失，不能只在 Adapter 日志里写 warning。
+
+例如：
+
+```text
+Codex native worker capability
+AVAILABLE → UNAVAILABLE
+```
+
+Scheduler 必须降低 native parallelism；Agent 页面与 Glass Box 应显示：
+
+```text
+Codex
+READY · DEGRADED
+Native parallel workers unavailable
+```
+
+如果用户当前 Mission 明确依赖该能力，则新的 Task 进入：
+
+```text
+WAITING_RUNTIME_CAPABILITY
+```
+
+或在 `AUTO/Hybrid` 允许的范围内重新规划 DeepSeek/Codex 路径，而不是运行到中间才失败。
+
+# 553. Session/Thread Compatibility 不能假设跨版本成立
+
+新 Runtime 安装完成后，旧 Session/Thread 可能：
+
+```text
+A. 原生可由新版本 resume
+B. 只能由旧版本 resume
+C. 完全不可恢复
+```
+
+因此 `RuntimeBinding` 增加：
+
+```text
+createdByInstallationId
+sessionFormatFingerprint
+resumeCompatibility
+```
+
+优先级：
+
+```text
+旧 Binding
+→ 旧 Last-Good Runtime 完成 / Drain
+
+若必须切新版本
+→ 先尝试明确支持的 Native Resume
+
+不能安全 Resume
+→ Recovery Capsule
+→ New RuntimeBinding
+→ Reconcile Workspace Effects
+```
+
+绝不通过“把旧 session id 塞给新版本试试看”来赌兼容。
+
+# 554. 配置 / Permission / Approval 语义迁移
+
+更新最危险的兼容变化之一不是 RPC，而是默认行为变化。例如新版本改变 Sandbox 默认值、Approval Mode、工具启用方式或配置字段名称。
+
+Workbench 更新前后必须比较：
+
+```text
+RuntimeConfigProjection(before)
+RuntimeConfigProjection(after)
+```
+
+如果同一用户设置在新版本上会产生不同安全语义：
+
+```text
+NEEDS_MIGRATION
+```
+
+必须明确迁移或要求用户确认，不能为了“更新成功”静默扩大权限。
+
+Workbench 仍然不实现自己的 Runtime 权限引擎；这里只验证并投影 DeepSeek/Codex 原生权限配置的兼容性。
+
+# 555. Error Contract Drift 直接影响 Provider Traffic / Recovery
+
+我们已经把 `429 / 502 / 503 / quota / auth / overload` 区分成不同 ProviderFailure。如果新 Harness 升级后错误结构或错误码变化，而 Adapter 没跟上，就可能把：
+
+```text
+RATE_LIMIT_TRANSIENT
+```
+
+错误分类成：
+
+```text
+TASK_FAILED
+```
+
+随后触发 Retry / Repair / Replan 风暴。
+
+因此 Runtime Update Contract Tests 必须验证至少以下 Normalization：
+
+```text
+RETRYABLE_RATE_LIMIT
+RETRYABLE_UPSTREAM
+RETRYABLE_NETWORK
+QUOTA_EXHAUSTED
+AUTH_INVALID
+MODEL_UNAVAILABLE
+REQUEST_TOO_LARGE
+POLICY_REJECTED
+```
+
+升级后的 Error Normalization 不通过时，新版本不能进入 FULL READY。
+
+# 556. Upgrade UI 放进 Boujoy-style Live Signal，而不是做独立复杂页面
+
+用户提供的视觉参考里右侧 `LIVE SIGNAL` 很适合承载 Runtime 状态。Linux MVP 可在 Runtime/Settings 中提供完整管理页，同时在需要时用右侧 Signal Card 显示：
+
+```text
+LOCAL ENGINE
+Codex 0.x
+READY
+
+Update available
+0.y
+
+Compatibility
+Pending validation
+
+[Review Update]
+```
+
+更新进行中：
+
+```text
+CODEX UPDATE
+STAGED
+Probe 7 / 9
+Last-Good 0.x protected
+```
+
+失败：
+
+```text
+NEW VERSION
+INCOMPATIBLE
+
+Current Mission continues on Last-Good
+```
+
+不使用系统级大红弹窗吓用户；只有“当前 Last-Good 也不可用、Mission 受阻”才进入 Attention。
+
+# 557. Runtime Auto-update Policy
+
+Linux MVP 推荐默认：
+
+```text
+Workbench App Update
+= Notify / user-controlled install
+
+DeepSeek Harness Update
+= Notify + Stage/Validate, activation user-controlled
+
+Codex Harness Update
+= Notify + Stage/Validate, activation user-controlled
+```
+
+未来允许：
+
+```text
+AUTO_INSTALL_WHEN_IDLE
+```
+
+但必须满足：
+
+```text
+No active non-resumable Run
+Contract Tests passed
+Last-Good retained
+Rollback verified
+No permission semantic migration pending
+```
+
+不采用“每天自动更新到 latest”作为生产默认。
+
+# 558. Runtime Compatibility Matrix 与 Release Qualification
+
+Workbench 每个正式版本应声明经过验证的 Runtime Matrix，例如：
+
+```text
+Workbench 1.x
+
+DeepSeek Harness
+- Tested: A, B
+- Compatible range: ...
+- Degraded: ...
+
+Codex
+- Tested: X, Y
+- Compatible range: ...
+- Experimental API: OFF
+```
+
+用户安装了未知版本：
+
+```text
+UNVERIFIED
+↓
+Runtime Compatibility Gate
+```
+
+通过本机 Contract Tests 后可以进入 `LOCALLY_VERIFIED`，但 UI 仍应区分：
+
+```text
+Officially Tested
+Locally Verified
+Unknown / Incompatible
+```
+
+# 559. v0.41 Decision Log — Visual System / Runtime Upgrade Compatibility
+
+## D-521 — User-supplied Screenshot as Visual North Star
+
+**原决定：** 曾将参考截图的深色基底与荧光配色一并写入视觉规范。
+**状态：** Superseded by D-532
+
+## D-532 — Visual North Star Means Style Language, Not Palette
+
+**决定：** 用户提供截图作为 Linux Desktop 的 Visual Style North Star，借鉴对象是执行现场感、编辑式控制台构图、高密度强层级、多 Panel、编号/技术标签、非完全对称的空间节奏、硬边/切角/悬浮标签等视觉形式语言；截图中的具体颜色、深色背景和 Accent Palette 不构成强制规范。
+**状态：** Accepted
+
+## D-533 — Style System and Theme System Are Independent
+
+**决定：** `Style System = Layout/Geometry/Typography/Density/Motion/Panel Hierarchy`；`Theme System = Light/Dark/Background/Accent/Semantic Colors`。只要结构风格不变，未来 Dark/Light/High-Contrast/Custom Accent 都可属于同一 Workbench 视觉体系。
+**状态：** Accepted
+
+## D-522 — Runtime Updates Are Compatibility Transactions, Not Binary Replacement
+
+**决定：** DeepSeek/Codex 更新采用 Stage/Probe/Contract Test/Canary/Drain/Activate/Observe；禁止在活跃不可恢复 Mission 中直接覆盖 binary。
+**状态：** Accepted
+
+## D-523 — Runtime Version Is Insufficient; Protocol and Capability Fingerprints Are Required
+
+**决定：** 兼容判定必须记录 Protocol/Capability/Config Fingerprint；SemVer 仅是输入之一。
+**状态：** Accepted
+
+## D-524 — Codex Stable app-server Surface Is the Linux MVP Baseline
+
+**决定：** Codex Adapter 默认使用 stable app-server API；以安装 binary 生成的 schema 作为该版本协议真值。Experimental API 不进入 Linux MVP 稳定能力基线，除非显式 Feature Flag + Pin + Contract Test。
+**状态：** Accepted
+
+## D-525 — DeepSeek Harness Remains Upstream Runtime Truth
+
+**决定：** Workbench 复用 DeepSeek Harness 上游 RPC/Event/Permission 语义，不 fork 私有协议；所有版本变化仍须经过 DeepSeek Adapter Compatibility Gate。
+**状态：** Accepted
+
+## D-526 — Last-Good Runtime Must Survive Failed Updates
+
+**决定：** 新版本失败/不兼容时保留并继续使用 Last-Good；不因一次升级让健康 Mission 失去可运行 Runtime。
+**状态：** Accepted
+
+## D-527 — Existing Bindings Prefer Their Creating Runtime Installation
+
+**决定：** 旧 Session/Thread 优先由创建它们的 Runtime Installation Drain；跨版本 Resume 只有 Adapter 明确验证支持时才允许，否则使用 Recovery Capsule 新建 Binding。
+**状态：** Accepted
+
+## D-528 — Permission Semantic Drift Requires Migration, Never Silent Broadening
+
+**决定：** 如果升级使原生 Sandbox/Approval/Permission 设置产生新的安全语义，则进入 NEEDS_MIGRATION；Workbench 不静默扩大权限。
+**状态：** Accepted
+
+## D-529 — Error-normalization Compatibility Is a Release Gate
+
+**决定：** 429/5xx/quota/auth/model/policy 等 Error Contract 必须通过 Adapter Contract Test；否则新 Runtime 不进入 FULL READY，防止基础设施异常被误判成 Task Failure。
+**状态：** Accepted
+
+## D-530 — Capability Regression Degrades Features, Not Necessarily the Whole Runtime
+
+**决定：** 单项能力回归可进入 COMPATIBLE_DEGRADED，并让 Scheduler/UI 禁用相关能力；只有核心 Turn/Session/Permission 契约不可用才判 Runtime INCOMPATIBLE。
+**状态：** Accepted
+
+## D-531 — Linux MVP Runtime Activation Is User-controlled by Default
+
+**决定：** 可以自动发现、下载/Stage、运行兼容检查，但 DeepSeek/Codex 新版本默认由用户确认激活；未来才允许满足严格条件的 idle auto-activation。
+**状态：** Accepted
+
+
+# 560. v0.42 Credential / Secret Storage 与 Cloud Data Egress：Linux MVP 的云模型安全边界
+
+当前 Workbench 已明确：主 Agent 只运行于 DeepSeek Harness / Codex Harness，模型主要来自云端；Workspace、Agent Private Memory、Project Knowledge、Tool Output 都可能在实际任务中成为模型上下文。因此 Linux MVP 必须在实现前把两件事彻底分开：
+
+```text
+Credential Plane
+= API Key / Token / Password / Login Session / Secret Handle
+
+Context Plane
+= User Message / Memory / Knowledge / Workspace / Tool Output / Artifact
+```
+
+两者不能因为“都要送给 Runtime”而混成一个 Prompt 或环境变量集合。
+
+核心原则：
+
+> **模型需要知道“可以使用某个服务”，不代表模型需要知道该服务的 Secret。**
+
+> **Agent Memory 对其他 Agent 私有，不等于它天然禁止发送给该 Agent 当前所使用的已批准云模型；跨 Agent 隐私与云端数据外发是两个独立维度。**
+
+# 561. Credential Plane：Agent / Model 永远不读取原始 Secret
+
+推荐的数据关系：
+
+```text
+Provider Registry
+    │
+    └── credentialRef = cred://provider/deepseek/main
+                         │
+                         ▼
+                  Credential Broker
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+       Runtime-native Auth    Workbench Secret Store
+              │                     │
+              ▼                     ▼
+       DeepSeek / Codex      Secret Service / Vault
+```
+
+数据库、YAML、Event Store、CommandReceipt、Glass Box 中只能保存：
+
+```text
+credentialRef
+providerId
+credentialType
+createdAt
+lastValidatedAt
+status
+```
+
+禁止保存：
+
+```text
+raw API key
+refresh token
+password
+private key contents
+```
+
+Agent Tool Schema 中也不提供：
+
+```text
+credential.get_raw()
+secret.read()
+```
+
+此类接口。
+
+# 562. Runtime-native Auth First
+
+如果 DeepSeek Harness / Codex Harness 已经有自己的安全登录/认证机制，Workbench 优先复用原生认证，不主动提取或复制它的 Token。
+
+例如概念上：
+
+```text
+Codex Runtime
+Auth = MANAGED_BY_CODEX
+
+DeepSeek Harness
+Auth = MANAGED_BY_DEEPSEEK
+```
+
+Workbench 只记录：
+
+```text
+AuthStatus = READY / EXPIRED / NEEDS_LOGIN
+```
+
+并通过 Adapter 发起原生 login / re-auth 流程。
+
+只有当某个 Provider/Runtime 明确需要 Workbench 管理 API Key 时，才进入 Workbench CredentialStore。
+
+这样避免形成：
+
+```text
+Runtime 自己存一份 Token
+Workbench 再复制一份
+Plugin 又拿一份
+```
+
+的秘密扩散。
+
+# 563. Linux CredentialStore：Secret Service 优先，不允许明文 fallback
+
+Linux Desktop 首版优先通过 Freedesktop Secret Service 兼容实现保存 Workbench 管理的 Secret，使 GNOME Keyring / KDE Wallet 等桌面 Secret Service 能成为实际存储后端。
+
+建议抽象：
+
+```text
+CredentialStore
+  store(ref, secret)
+  resolve(ref)
+  delete(ref)
+  rotate(ref)
+  status(ref)
+```
+
+实现优先级：
+
+```text
+1. Runtime-native credential store
+2. Linux Secret Service
+3. Explicit encrypted local vault（仅在 Secret Service 不可用时）
+```
+
+禁止：
+
+```text
+credentials.yaml 明文
+SQLite 明文
+.env 作为 Workbench 永久密钥库
+fallback 到 ~/.config/.../key.txt
+```
+
+如果 Linux 环境没有 Secret Service，而用户又没有配置加密 Vault：
+
+```text
+Credential Storage
+UNAVAILABLE
+```
+
+要求用户选择安全存储方式，而不是“为了能用先明文存”。
+
+# 564. Secret 注入：最小范围、最短生命周期
+
+某些 CLI/API 只支持环境变量 Secret；这时 Workbench 可以在启动目标 Runtime 子进程时做最小范围注入，但不能把 Secret 写入全局 shell 环境或长期配置。
+
+优先顺序：
+
+```text
+Runtime-native login/session
+        ↓
+FD / pipe / structured auth channel（若 Runtime 支持）
+        ↓
+Child-process scoped environment variable
+```
+
+环境变量方式必须满足：
+
+```text
+仅目标进程树继承
+不写入 shell profile
+不写 Event Store
+不写日志
+不显示 Glass Box 原文
+进程退出后不再保留
+```
+
+Plugin / Skill 默认不能继承全部 Provider Secret。某个 Plugin 真正需要 Credential 时，应声明独立 Credential Slot，并由用户/管理员显式映射具体 `credentialRef`。
+
+# 565. Credential Status 与 Rotation
+
+Credential 本身需要状态机：
+
+```text
+READY
+LOCKED
+EXPIRED
+INVALID
+ROTATION_REQUIRED
+MISSING
+```
+
+Provider 返回 Auth Failure 时：
+
+```text
+AUTH_INVALID
+        ↓
+CredentialStatus = INVALID
+        ↓
+停止该 Credential 的新 Admission
+        ↓
+AttentionItem
+```
+
+不能把它当成：
+
+```text
+Task failed
+→ retry 20 次
+```
+
+Rotation 采用：
+
+```text
+Add New Secret
+    ↓
+Validate
+    ↓
+Atomic CredentialRef Target Switch
+    ↓
+Drain old consumers
+    ↓
+Revoke/Delete old secret
+```
+
+避免一半 Agent 用旧 Key、一半 Agent 用新 Key而状态不可追踪。
+
+# 566. Privacy Scope 与 Data Egress Scope 必须分离
+
+当前系统已经定义：
+
+```text
+Agent A Private Memory
+不能被 Agent B 读取
+```
+
+这属于：
+
+```text
+Sharing Scope
+```
+
+但 Agent A 本身使用云端 DeepSeek/Codex 模型时，其被选择进入该轮 Context 的 Private Memory 是否能发给对应 Provider，属于：
+
+```text
+Data Egress Scope
+```
+
+因此每个数据对象至少有两个正交维度：
+
+```text
+shareScope
+    PRIVATE_AGENT
+    PROJECT_SHARED
+    TEAM_SHARED
+
+cloudEgress
+    APPROVED_CLOUD
+    PROVIDER_RESTRICTED
+    ASK
+    LOCAL_ONLY
+```
+
+不能把：
+
+```text
+PRIVATE_AGENT
+```
+
+错误解释成：
+
+```text
+LOCAL_ONLY
+```
+
+否则使用云模型的 Personal Agent 根本无法利用自己的长期 Memory。
+
+# 567. Data Egress Policy：Project / Workspace / Resource 分层继承
+
+建议策略继承：
+
+```text
+Workbench Default
+      ↓
+Project Policy
+      ↓
+Workspace Policy
+      ↓
+Path / Resource Override
+      ↓
+Current Materialization
+```
+
+Linux MVP 支持四种核心 Egress 语义：
+
+```text
+APPROVED_CLOUD
+可自动发送最小必要内容给项目批准的 Provider
+
+PROVIDER_RESTRICTED
+只允许发送给指定 Provider / Provider Group
+
+ASK
+真正准备外发时需要用户确认
+
+LOCAL_ONLY
+禁止发送到任何云模型
+```
+
+如果某资源是 `LOCAL_ONLY`，而当前没有本地模型，则系统必须诚实显示：
+
+```text
+AI understanding unavailable under current policy
+```
+
+而不是偷偷绕过策略。
+
+# 568. Normal Cloud Usage 不应每轮弹窗
+
+因为 Workbench 的主模型本来就是云端，所以普通聊天如果每轮都弹：
+
+```text
+“是否允许把这句话发送给 DeepSeek？”
+```
+
+产品无法使用。
+
+正确交互是：
+
+首次连接 Provider / 首次创建 Project 时明确设置：
+
+```text
+Approved Providers
+Default Cloud Egress Policy
+Sensitive File Handling
+```
+
+正常 `APPROVED_CLOUD` 内容自动按 Minimum Sufficient Material 规则外发。
+
+只有：
+
+```text
+ASK resource
+LOCAL_ONLY conflict
+new provider
+sensitive credential-like content
+unknown external worker egress
+```
+
+才产生明确阻断/确认。
+
+# 569. Materialization 与 Egress Preflight 合并
+
+上一版已经有：
+
+```text
+ResourceIntent
+    ↓
+MaterializationPlan
+```
+
+现在增加：
+
+```text
+MaterializationPlan
+    ↓
+Egress Preflight
+    ↓
+Secret Scan / Redaction
+    ↓
+Provider Policy Check
+    ↓
+Final Payload
+```
+
+例如：
+
+```text
+report.pdf
+300 pages
+
+Task needs Runtime API
+        ↓
+Pages 21-24 text
+        ↓
+Egress check
+        ↓
+Approved Cloud ✓
+        ↓
+send 8K tokens
+```
+
+而不是先把整个文件上传以后再判断。
+
+# 570. Secret Detection / Redaction：防止代码与日志把 Key 带进 Prompt
+
+Workspace 中很容易存在：
+
+```text
+.env
+AWS credentials
+private keys
+GitHub tokens
+npm tokens
+password in test fixture
+secret printed by CLI
+```
+
+因此所有准备进入云模型的 Workspace/Text/Tool Output Material 都应先经过本地 Deterministic Secret Scanner。
+
+检测来源可以组合：
+
+```text
+known key patterns
+known secret filenames
+high-entropy token heuristics
+provider-specific prefixes
+custom project rules
+```
+
+借鉴 Gitleaks 一类开源 secret detection rule set / workflow，但不把“扫描通过”宣传成绝对无 Secret。
+
+默认行为：
+
+```text
+secret value
+→ <REDACTED_SECRET:type:id>
+```
+
+并保留：
+
+```text
+SecretRedactionRecord
+sourceRef
+range/hash
+ruleId
+```
+
+但不把 Secret 原文写入该记录。
+
+# 571. Credential 文件默认不进入模型 Context
+
+典型敏感文件类型应默认标记：
+
+```text
+.env*
+*.pem
+*.key
+id_rsa*
+credentials files
+.netrc
+.pypirc
+npm auth config
+cloud-provider credential files
+```
+
+它们可以存在于 Workspace，也可以被 Harness 工具在原生权限范围内使用，但不能因为：
+
+```text
+Agent 搜索到了这个文件
+```
+
+就自动全文发送给模型。
+
+若任务需要理解配置结构，优先发送：
+
+```text
+key names
+schema
+redacted values
+```
+而不是值本身。
+
+# 572. Secret-aware Tool Output Projection
+
+例如命令输出：
+
+```text
+DATABASE_URL=postgres://user:password@host/db
+```
+
+完整 stdout 即使只是“测试日志”，也不能直接进入下一轮模型上下文。
+
+数据路径应为：
+
+```text
+Tool Raw Output
+        │
+        ├── Local Raw Sidecar (restricted / short retention)
+        │
+        ▼
+Secret Scanner
+        ↓
+ToolOutputProjection
+        ↓
+Model Context
+```
+
+结构化日志、Event Store、Attention、Notification 和 Support Bundle 只使用 redacted projection。
+
+Raw Sidecar 若检测到 Secret：
+
+```text
+SENSITIVE_EVIDENCE
+```
+
+采用更短 TTL、0600 权限，并默认禁止同步/导出。
+
+# 573. Credential Plane 与 Tool Execution 的关键原则
+
+例如 Agent 要访问一个私有数据库。
+
+错误：
+
+```text
+Model:
+“数据库密码是 abc123”
+
+Tool:
+connect(password="abc123")
+```
+
+正确：
+
+```text
+Model:
+“使用 database credential slot 执行查询”
+        ↓
+Tool Invocation
+credentialRef = cred://project/db/main
+        ↓
+Host / Plugin Adapter
+Credential Broker resolve
+        ↓
+真实执行
+```
+
+模型知道：
+
+```text
+有这个 Credential Slot
+```
+
+但不知道：
+
+```text
+Secret Value
+```
+
+这条原则未来同样适用于 Git Token、云存储 Credential、第三方 API Key 等。
+
+# 574. External Worker 的 Data Egress 必须单独计算
+
+Room/Mission 中未来可能使用 Claude Code / OpenCode / OpenClaw 等 ExternalExecutionWorker。
+
+这些 Worker 不是主 Agent，但它们可能连接不同 Provider，因此：
+
+```text
+Task assigned to Worker
+        ↓
+Worker Egress Capability
+        ↓
+Project Egress Policy
+        ↓
+MaterializationPlan
+```
+
+如果 Workbench 无法可靠知道某 Worker 会把什么发送到哪个 Provider：
+
+```text
+EgressVisibility = OPAQUE
+```
+
+Linux MVP/安全模式下不得对受限制 Workspace 自动使用该 Worker；必须由项目策略显式允许。
+
+所以：
+
+> **“能运行这个 CLI”与“允许把这个 Project 的内容交给这个 CLI 的远端服务”是两个不同条件。**
+
+# 575. DataEgressReceipt：知道实际发了什么类型的数据，而不是记录秘密本身
+
+每次实际云端 Materialization 可生成：
+
+```text
+DataEgressReceipt
+
+Run             R-821
+Agent           Coding Agent
+Provider        Approved Provider A
+Model           Model X
+
+Sources
+- Decision D-412
+- router.rs rev 82, lines ...
+- ToolOutputProjection T-19
+
+Materialized
+3 text chunks
+1 image
+42 KB
+Estimated 9.4K input tokens
+
+Redaction
+2 secrets removed
+
+Policy
+Project APPROVED_CLOUD
+Workspace inherited
+
+Result
+ALLOWED
+```
+
+Receipt 不保存：
+
+```text
+API Key
+Secret original value
+full copied prompt
+```
+
+如果真正需要事故审计，应通过受控的本地 evidence/ref 追溯，而不是在 Receipt 中制造第二份敏感内容。
+
+# 576. Provider Profile 只记录已知 Data Handling Metadata，不做虚假保证
+
+Model/Provider Registry 可以保存管理员配置的：
+
+```text
+provider
+endpoint
+region (if known)
+data retention note
+training/use note
+organization account
+approved project classes
+```
+
+但这些字段是：
+
+```text
+configuration / policy metadata
+```
+
+Workbench 不应自行宣称：
+
+```text
+“某 Provider 绝不保存数据”
+```
+
+除非管理员/部署方依据其实际合同和 Provider 条款进行配置。
+
+# 577. Runtime Upgrade Gate 增加 Auth Contract Drift
+
+DeepSeek/Codex 更新除了检查：
+
+```text
+Session
+Approval
+Tool Event
+Error Normalization
+```
+
+还要检查：
+
+```text
+Auth Mode
+Credential Storage Location
+Credential Scope
+Login Flow
+Environment Variable Names
+Token Refresh Semantics
+```
+
+如果新版 Runtime 从：
+
+```text
+native secure login
+```
+
+变成需要：
+
+```text
+raw API key environment
+```
+
+则：
+
+```text
+AUTH_CONTRACT_CHANGED
+NEEDS_MIGRATION
+```
+
+不能静默切换。
+
+Credential migration 由 Workbench Host/Runtime 官方流程完成，禁止让 Agent/模型读取 Secret 后“帮你迁移”。
+
+# 578. Linux MVP 设置页
+
+设置中建议出现：
+
+```text
+AI PROVIDERS
+
+DeepSeek Harness
+Auth: Managed by Runtime
+Status: Ready
+
+Codex Harness
+Auth: Managed by Runtime
+Status: Ready
+
+Provider X
+Credential: Workbench Keyring
+Status: Ready
+[Rotate] [Remove]
+```
+
+以及 Project：
+
+```text
+CLOUD DATA
+
+Approved Providers
+DeepSeek   ✓
+Codex      ✓
+
+Default
+Approved Cloud
+
+Sensitive Resources
+Ask / Block
+
+Blocked Paths
+.env*
+secrets/**
+private/**
+```
+
+Secret 保存后 UI 默认只显示：
+
+```text
+••••••••  last 4 / fingerprint if safe
+```
+
+不提供普通“显示完整 Key”按钮；需要替换则走 Rotate / Re-enter。
+
+# 579. Open-source / Platform Reference
+
+Linux Credential Store 优先参考 Freedesktop Secret Service API，因为它提供桌面会话中的通用 Secret Storage 接口，可由 GNOME Keyring、KWallet 等实现，并支持锁定/解锁与客户端检索。
+
+Secret Detection 方向可参考 Gitleaks 的规则化 hardcoded secret detection 思路；Workbench 只把它作为检测/规则参考或可插拔 Scanner，不认为任何 scanner 可以证明“Payload 绝无秘密”。
+
+SOPS/age 等 encrypted file 工具可以作为未来“显式加密导入/备份配置”的研究参考，但 Linux MVP 不把 Provider API Key 默认存成用户目录中的 encrypted YAML；桌面 Secret Store / Runtime-native Auth 仍是首选。
+
+# 580. v0.42 Decision Log — Credential / Secret / Cloud Egress
+
+## D-534 — Credential Plane and Context Plane Are Separate
+
+**决定：** API Key/Token/Password 等 Secret 通过 Credential Plane 管理；User Message/Memory/Workspace/Tool Output 通过 Context Plane 管理。模型不能因为需要使用 Provider/Tool 而读取 Secret 原文。
+**状态：** Accepted
+
+## D-535 — Runtime-native Authentication Is Preferred
+
+**决定：** DeepSeek/Codex 已有原生安全认证时优先复用其官方 credential/session 机制，Workbench 只记录 AuthStatus，不复制 Token。
+**状态：** Accepted
+
+## D-536 — Linux Secret Service Is the Preferred Workbench-managed Secret Store
+
+**决定：** Linux MVP 中 Workbench 自管 Secret 优先存入 Freedesktop Secret Service 兼容后端；数据库/配置文件只保存 CredentialRef。无安全 Secret Store 时禁止明文 fallback。
+**状态：** Accepted
+
+## D-537 — Secret Injection Must Be Scoped and Ephemeral
+
+**决定：** 只有 Runtime 明确需要时才将 Secret 注入目标进程；优先 native auth/structured channel，环境变量仅限目标子进程树，不进入全局 shell、日志、Event Store 或 Agent Context。
+**状态：** Accepted
+
+## D-538 — Private Memory Scope and Cloud Egress Scope Are Orthogonal
+
+**决定：** Agent Private Memory 仍禁止其他 Agent读取，但该 Agent 本人选中的 Memory 是否可发送给当前云模型由独立 Egress Policy 决定；`PRIVATE_AGENT` 不等于 `LOCAL_ONLY`。
+**状态：** Accepted
+
+## D-539 — Data Egress Is Policy Inheritance, Not Per-turn Prompt Spam
+
+**决定：** Cloud Egress 由 Workbench/Project/Workspace/Resource 分层策略决定；普通 APPROVED_CLOUD Context 不逐轮询问，ASK/LOCAL_ONLY/新 Provider/敏感异常才阻断。
+**状态：** Accepted
+
+## D-540 — Minimum Sufficient Material Must Pass Egress Preflight Before Upload
+
+**决定：** MaterializationPlan 在实际发送云端前经过 Egress/Secret/Provider Policy 检查；禁止“先上传完整文件，再决定该不该上传”。
+**状态：** Accepted
+
+## D-541 — Secret Detection and Redaction Are Default Cloud-context Guards
+
+**决定：** Workspace/Text/Tool Output 进入云模型前进行本地 deterministic secret detection/redaction；扫描器不是绝对安全证明，敏感资源仍受独立 Egress Policy 管理。
+**状态：** Accepted
+
+## D-542 — Credential Files Are Not Auto-materialized
+
+**决定：** `.env`、私钥、Credential 文件等默认不作为模型 Context；任务需要配置结构时优先发送 key/schema + redacted value。
+**状态：** Accepted
+
+## D-543 — Raw Tool Output and Model-visible Tool Output Are Separate
+
+**决定：** 完整工具输出可作为受限本地 evidence 保存，但模型、Event Store、通知和支持包使用 Secret-aware ToolOutputProjection；检测到 Secret 的 Raw Sidecar采用更短 Retention 且默认不同步。
+**状态：** Accepted
+
+## D-544 — Tools Receive Credential Handles, Not Secret-bearing Prompts
+
+**决定：** 需要 Credential 的 Tool/Plugin 通过显式 Credential Slot/Ref 由 Host resolve，模型只引用 handle，不获得真实 Secret。
+**状态：** Accepted
+
+## D-545 — External Worker Egress Is a Separate Compatibility Dimension
+
+**决定：** Room ExternalExecutionWorker 除执行能力外必须声明/探测 Data Egress 行为；无法可靠观察时标记 OPAQUE_EGRESS，受限制 Project 不自动使用。
+**状态：** Accepted
+
+## D-546 — Every Cloud Materialization Produces a Non-secret DataEgressReceipt
+
+**决定：** Receipt 记录 Provider/Model、SourceRef/Revision、Material 类型/体量、Redaction、Policy 与结果，但不复制 Raw Prompt 或 Secret 原文。
+**状态：** Accepted
+
+## D-547 — Provider Data-handling Metadata Is Configuration, Not a Workbench Guarantee
+
+**决定：** Workbench 可以保存管理员确认的 retention/region/training 等 Provider Metadata，但不自行替 Provider 做不可验证的数据处理承诺。
+**状态：** Accepted
+
+## D-548 — Authentication Contract Drift Is Part of Runtime Upgrade Compatibility
+
+**决定：** DeepSeek/Codex 升级必须检查 Auth Mode、Credential Store、Env Name、Login/Refresh 语义；发生变化进入 NEEDS_MIGRATION，禁止 Agent/模型参与 Secret 迁移。
+**状态：** Accepted
+
+## D-549 — Invalid Credentials Stop Admission, Not Retry Storms
+
+**决定：** AUTH_INVALID/EXPIRED/ROTATION_REQUIRED 直接影响 Credential/Provider 状态并进入 Attention；不作为普通 5xx/429 无限 Retry。
+**状态：** Accepted
+
+## D-550 — Secrets Are Excluded From Support Bundles and Sync by Default
+
+**决定：** Secret、Raw credential-bearing logs、敏感 Raw Sidecar 默认不进入 Support Bundle、Agent Data Sync、Workspace Metadata Sync 或远程投影；需要导出时必须是显式、受控的安全流程。
+**状态：** Accepted
+
+## D-551 — Linux MVP Does Not Require Central Team Secret Distribution
+
+**决定：** v1 先完成单机/用户级 Runtime-native Auth + Linux Secret Store；团队级共享 Credential Broker、短期服务令牌和集中式 Secret 分发保留接口但后移，避免过早引入服务器安全基础设施。
+**状态：** Accepted
+
+# 581. Linux Installation / Bootstrap 总原则
+
+Linux 第一版的安装目标不是“把所有依赖装完”，而是：
+
+> **用户下载安装 Workbench 后，以最少系统侵入、最少管理员权限和可明确回滚的方式，让至少一个 Core Harness READY，并能开始与 Personal Primary Agent 对话。**
+
+需要把三个生命周期分开：
+
+```text
+Workbench Desktop / workbenchd
+        ≠
+DeepSeek Harness Installation
+        ≠
+Codex Harness Installation
+```
+
+Workbench 本体升级不能隐式替换 Harness；Harness 升级也不能要求重新安装整个 Workbench。
+
+首版遵循：
+
+```text
+No root daemon
+No hidden sudo
+No silent curl | sh
+No overwrite of user-owned runtime
+No mandatory installation of both runtimes before first use
+```
+
+# 582. Linux Distribution Baseline
+
+Tauri v2 当前可面向 Linux 分发 Debian package、RPM、AppImage、Snap、Flatpak/AUR 等格式。Linux MVP 不需要第一天覆盖所有渠道。
+
+建议初始发布矩阵：
+
+```text
+Primary Package
+.deb
+
+Primary Portable
+AppImage
+
+Secondary Package
+.rpm
+```
+
+优先测试：
+
+```text
+Ubuntu 22.04 LTS
+Ubuntu 24.04 LTS
+Debian 12
+Fedora current stable
+```
+
+构建环境以“最老的正式支持基础系统”为基线，避免在过新的 glibc 上构建导致旧发行版无法启动。AppImage 作为便携分发并不意味着所有系统能力都完全零依赖，因此仍需 Startup Host Probe。
+
+Arch/AUR、Flatpak、Snap 可以后续扩展，不作为首条 Vertical Slice 的阻塞条件。
+
+# 583. Workbench 本体安装与 workbenchd Bootstrap
+
+Workbench 安装包至少包含：
+
+```text
+team-workbench        Desktop UI
+workbenchd            Rust user service
+service template      systemd --user
+runtime adapters      DeepSeek / Codex adapter code
+migration/bootstrap   local data setup
+```
+
+默认不创建 root/system-wide daemon。
+
+首次启动时：
+
+```text
+Desktop
+   ↓
+probe workbenchd
+   ↓
+不存在 / 版本不匹配
+   ↓
+install or refresh user service
+   ↓
+~/.config/systemd/user/... or package-provided user unit
+   ↓
+systemctl --user daemon-reload
+   ↓
+start workbenchd
+```
+
+这一步属于 Workbench 自己的用户级组件管理，不需要 Agent/LLM 参与。
+
+如果当前环境没有 systemd user session，Workbench 应支持 foreground/service fallback，而不是整个程序拒绝启动；后台常驻能力可以显示 DEGRADED。
+
+# 584. Runtime Installation 是一等对象
+
+新增：
+
+```text
+RuntimeInstallation
+```
+
+示意：
+
+```ts
+interface RuntimeInstallation {
+  installationId: string;
+  runtimeKind: "DEEPSEEK" | "CODEX";
+  source: "MANAGED" | "EXTERNAL";
+  version: string;
+  executableRef: string;
+  installRoot?: string;
+  adapterVersion: string;
+  protocolFingerprint?: string;
+  capabilityFingerprint?: string;
+  authMode?: string;
+  status:
+    | "DISCOVERED"
+    | "PROBING"
+    | "READY"
+    | "DEGRADED"
+    | "INCOMPATIBLE"
+    | "NEEDS_PREREQUISITE"
+    | "NEEDS_AUTH"
+    | "QUARANTINED";
+  lastGood?: boolean;
+  managedChannel?: "STABLE" | "PINNED" | "CANARY";
+}
+```
+
+`RuntimeBinding` 必须绑定 `installationId`，而不是只绑定 `runtimeKind`。
+
+这样同一台机器可以同时保留：
+
+```text
+Codex 0.A   LAST-GOOD
+Codex 0.B   STAGED
+
+DeepSeek X  LAST-GOOD
+DeepSeek Y  CANARY
+```
+
+而当前 Run 知道自己究竟使用了哪一个安装实例。
+
+# 585. Managed Installation 与 External Installation
+
+Workbench 同时支持两种模式。
+
+## 585.1 Managed Installation — 推荐路径
+
+Workbench 将受支持 Runtime 安装到用户级私有目录，例如概念上：
+
+```text
+~/.local/share/team-workbench/runtimes/
+  codex/<installation-id>/
+  deepseek/<installation-id>/
+```
+
+特点：
+
+```text
+不覆盖 /usr/bin
+不修改用户全局 npm package
+不要求 sudo
+版本可 Pin
+可以 Side-by-side
+可以 Last-Good 回滚
+```
+
+Managed 只表示 Workbench 管理**可执行 Runtime 安装物**，不表示 Workbench 接管 Harness 原生认证、Permission 或 Sandbox。
+
+## 585.2 External Installation — 高级 / 兼容路径
+
+允许用户使用：
+
+```text
+PATH 中的 codex / dsh
+自定义绝对路径
+用户自己维护的版本
+```
+
+Workbench 只：
+
+```text
+Discover
+Probe
+Compatibility Test
+Bind
+```
+
+绝不覆盖或自动升级用户拥有的 External Installation。
+
+如果 External Runtime 升级后不兼容，Workbench 可以提示用户选择旧路径、Managed Slot 或等待 Adapter 更新。
+
+# 586. Codex 安装策略
+
+Codex 当前官方在 Linux 提供 standalone installer / release binary，并且也支持 npm 等安装方式。对 Workbench 来说，Linux Managed Mode 优先使用官方 standalone Linux binary：
+
+```text
+Official Release Metadata
+        ↓
+Download exact approved version
+        ↓
+Verify release metadata / checksum/signature when official channel exposes
+        ↓
+Install into new user Runtime Slot
+        ↓
+Probe
+        ↓
+Generate / Inspect version-specific app-server schema when available
+        ↓
+Contract Test
+        ↓
+READY / STAGED
+```
+
+不要把：
+
+```text
+npm install -g @openai/codex
+```
+
+作为 Workbench 默认 Managed 行为，因为它会修改用户全局 package state，也不利于 Side-by-side / Last-Good。
+
+External Mode 仍然允许用户自行使用 npm/Homebrew/官方 installer 安装的 Codex。
+
+# 587. DeepSeek Harness 安装策略
+
+DeepSeek Harness 官方当前 README 明确标记为 developer preview，并提示会发生 compatibility-breaking changes；官方运行路径当前以 Node/npm package（例如 `npx @deepseek-ai/dsh web`）和源码构建为主。
+
+因此 Linux MVP 不能假设它已经像 Codex standalone binary 一样拥有稳定、无依赖的安装物。
+
+建议：
+
+```text
+DeepSeek RuntimeInstallerProvider
+        ↓
+Prerequisite Probe
+        ↓
+Node runtime available?
+        ↓
+Install exact @deepseek-ai/dsh version into user-scoped slot
+        ↓
+No global npm mutation
+        ↓
+Probe / Protocol Fingerprint / Contract Test
+```
+
+第一阶段可以把兼容 Node 版本作为明确 prerequisite；如果缺失，则给用户显示可执行的安装指导或受控安装入口，而不是后台偷偷 sudo。
+
+未来若 DeepSeek 官方提供稳定 standalone distribution，可替换 `RuntimeInstallerProvider`，上层 `RuntimeInstallation` / Binding / Last-Good 架构不变。
+
+Workbench 不依赖社区 DeepSeek Desktop 包作为核心运行真源；它们可以作为安装体验和打包方式参考。
+
+# 588. GUI PATH Discovery 不可信任 shell dotfile 副作用
+
+Linux GUI 应用经常不会继承用户交互式 shell 的完整 `$PATH`。
+
+因此 Runtime Discovery 不应只做：
+
+```text
+which codex
+which dsh
+```
+
+然后认定“不存在”。
+
+建议 `ExecutableResolver` 按层探测：
+
+```text
+1. 已保存的 RuntimeInstallation 路径
+2. Workbench Managed Slots
+3. 用户明确 Custom Path
+4. process PATH
+5. 常见 user bin paths
+6. package-manager known locations
+7. 可选 login-shell PATH resolver
+```
+
+但不要为了获得 PATH 去 `source ~/.bashrc` / `eval` 用户 shell 初始化脚本，因为这些文件可能包含任意副作用。
+
+所有发现结果都先进入 `DISCOVERED`，必须 Probe 后才能标记 READY。
+
+# 589. First-run Bootstrap State Machine
+
+首次启动不采用一个巨大的“安装向导完成/失败”布尔值，而是持久 Bootstrap 状态：
+
+```text
+HOST_CHECK
+   ↓
+DATA_DIRECTORY
+   ↓
+SECRET_STORE
+   ↓
+WORKBENCHD
+   ↓
+RUNTIME_DISCOVERY
+   ↓
+RUNTIME_INSTALL / SELECT
+   ↓
+RUNTIME_PROBE
+   ↓
+AUTH
+   ↓
+LOCAL_CONTRACT_TEST
+   ↓
+PRIMARY_AGENT_CREATE
+   ↓
+READY
+```
+
+每一步：
+
+```text
+可重试
+可跳过非必要项
+有 Receipt
+重启 App 后继续
+```
+
+用户不应因为某一步失败被迫从头走一遍。
+
+# 590. 一个 Runtime READY 即可开始使用
+
+Linux MVP 不要求：
+
+```text
+DeepSeek READY
+AND
+Codex READY
+```
+
+以后才进入主界面。
+
+应该：
+
+```text
+DeepSeek READY
+Codex NOT CONFIGURED
+
+→ Workbench READY · Partial Capability
+```
+
+或者反过来。
+
+主 Agent Runtime Selector 只显示当前真正可用的候选；另一个 Runtime 显示：
+
+```text
+Not configured
+[Set up]
+```
+
+这会显著降低第一次使用的阻力，同时保持“双 Harness 是一等公民”的长期架构。
+
+# 591. 首次创建 Personal Primary Agent
+
+当至少一个 Core Harness READY 后，Bootstrap 才创建默认 Personal Primary Agent：
+
+```text
+new agent_id
+new private MemorySpace
+isPrimary = true
+
+Runtime Policy
+AUTO restricted to currently READY runtimes
+```
+
+创建 Agent 不需要模型调用。
+
+首次真正发消息时才发生第一笔云模型 Token 消耗。
+
+Workbench 不做：
+
+```text
+“为了测试是否可用，启动后自动让模型自我介绍”
+```
+
+这种隐藏付费调用。
+
+# 592. Smoke Test 分成 Local 与 Cloud 两层
+
+## Local Contract Test — 默认、0 Token
+
+安装后自动测试：
+
+```text
+binary starts
+protocol handshake
+version/schema
+capability probe
+session create/close if local-only
+approval event schema
+error normalization parser
+shutdown
+```
+
+不发送真实模型请求。
+
+## Cloud Connectivity Test — 可选 / 显式
+
+只有用户点击：
+
+```text
+[测试模型连接]
+```
+
+才允许发一个最小真实调用，并提前说明可能产生少量 Provider Token/费用。
+
+如果 Runtime-native auth 本身提供零 Token status endpoint，则优先使用它。
+
+# 593. Runtime Compatibility Matrix 不以版本号硬编码为唯一条件
+
+安装判定至少考虑：
+
+```text
+Version Range
+Protocol Fingerprint
+Schema Fingerprint
+Capability Probe
+Auth Contract
+Permission Contract
+Error Normalization Contract
+Resume Contract
+```
+
+因此：
+
+```text
+newer version
+```
+
+不自动等于：
+
+```text
+better / compatible
+```
+
+同理某版本超出已测试范围，但 Probe/Contract Test 部分可用时，可以进入：
+
+```text
+DEGRADED / UNVERIFIED
+```
+
+而不是把所有能力硬判死。
+
+高风险能力（Approval、Workspace side effect、Resume）在未验证时默认关闭；普通只读/聊天能力是否允许由兼容策略决定。
+
+# 594. Runtime Update 与 Workbench Update 必须分开
+
+存在三个独立更新域：
+
+```text
+Workbench Desktop / workbenchd
+DeepSeek Runtime
+Codex Runtime
+```
+
+任何更新都不能隐式级联另外两个。
+
+## Workbench App Update
+
+包管理版（deb/rpm）优先尊重 Linux 包管理语义；AppImage 可以利用签名更新 artifact 路径。无论哪种方式，升级前必须先让 workbenchd Drain / Checkpoint。
+
+## Managed Runtime Update
+
+走：
+
+```text
+Download new slot
+→ Probe
+→ Contract Test
+→ Canary
+→ Activate when idle / approved
+→ Keep Last-Good
+```
+
+External Runtime 则只做检测与提醒，Workbench 不替用户升级。
+
+# 595. Install / Update Transaction 与磁盘原子性
+
+Runtime 安装必须：
+
+```text
+Download to staging
+        ↓
+Verify
+        ↓
+Unpack to new immutable-ish version directory
+        ↓
+fsync / integrity check
+        ↓
+Register RuntimeInstallation
+        ↓
+Probe
+        ↓
+Atomic activate pointer
+```
+
+绝不：
+
+```text
+直接覆盖当前正在使用的 codex binary
+```
+
+下载中断只留下可清理的 staging job；Active / Last-Good 不受影响。
+
+下载 Runtime 复用已有 `TransferJob` 机制，支持断线续传和校验。
+
+# 596. Runtime Dependency / Prerequisite Projection
+
+依赖状态不能只显示一条红字：
+
+```text
+Runtime unavailable
+```
+
+需要结构化：
+
+```text
+DeepSeek Harness
+
+Harness package     MISSING
+Node runtime        READY 22.x
+Auth                NOT STARTED
+Protocol            NOT PROBED
+
+[Install DeepSeek Harness]
+```
+
+或：
+
+```text
+Codex
+
+Binary              READY
+Version             0.x
+Auth                 NEEDS LOGIN
+Contract             PASS
+
+[Sign in]
+```
+
+让用户知道究竟卡在哪一步。
+
+# 597. 安装过程禁止用 Agent 代替 Installer
+
+用户可以对主 Agent说：
+
+```text
+“帮我把 Codex 配好。”
+```
+
+主 Agent可以调用强类型 Workbench Control Tool：
+
+```text
+runtime.install.preview
+runtime.install.start
+runtime.auth.open
+runtime.probe
+```
+
+但：
+
+```text
+下载 URL
+版本选择
+checksum
+安装目录
+权限
+slot activation
+```
+
+必须由 `RuntimeInstallationManager` 确定性执行。
+
+禁止让模型生成：
+
+```text
+curl ... | sudo bash
+```
+
+然后当作正式安装机制。
+
+# 598. 首次启动 UI 建议
+
+视觉上仍沿用已经确定的 Workbench style language，而不是传统 Setup Wizard 大白表单。
+
+可以表现为一个“System Bring-up”执行现场：
+
+```text
+SYSTEM / 00
+FIRST RUN
+
+Workbench Service      READY
+Secret Store           READY
+
+CORE RUNTIMES
+DeepSeek Harness       SETUP
+Codex Harness          READY
+
+PRIMARY AGENT
+Waiting for runtime...
+```
+
+右侧 Live Signal 显示：
+
+```text
+HOST
+Linux x86_64
+
+WORKBENCHD
+Connected
+
+READY TO START
+Codex
+```
+
+一旦一个 Runtime READY，主 CTA 立即允许：
+
+```text
+[进入 My Agent]
+```
+
+剩余 Runtime 之后再配。
+
+# 599. 安装/启动 Receipt
