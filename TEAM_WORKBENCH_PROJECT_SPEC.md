@@ -34964,3 +34964,6883 @@ Codex
 剩余 Runtime 之后再配。
 
 # 599. 安装/启动 Receipt
+新增：
+
+```text
+BootstrapReceipt
+RuntimeInstallReceipt
+RuntimeProbeReceipt
+RuntimeCompatibilityReceipt
+```
+
+Receipt 记录：
+
+```text
+installationId
+runtime kind/version/source
+prerequisite results
+protocol/capability fingerprint
+contract tests
+activation/rollback result
+non-secret failure reason
+```
+
+不记录：
+
+```text
+API Key
+Auth Token
+完整 login cookie
+Secret-bearing env
+```
+
+# 600. Linux MVP 安装验收矩阵
+
+至少故障注入：
+
+```text
+Workbench 首次启动中途 crash
+workbenchd 安装/启动失败
+Secret Service 不存在
+只有 Codex，DeepSeek 缺失
+只有 DeepSeek，Codex 缺失
+两者都缺失
+External runtime PATH 找不到但 custom path 可用
+Runtime 版本过新 / 过旧
+Runtime protocol drift
+Runtime auth 过期
+下载中断
+磁盘空间不足
+Runtime staging 校验失败
+新版 Contract Test 失败
+Canary crash
+Last-Good 回滚
+AppImage 环境 PATH 与 terminal PATH 不一致
+升级时有正在运行 Mission
+```
+
+验收重点：
+
+```text
+不重复安装
+不覆盖用户 External Runtime
+不要求 sudo 才能恢复
+不丢 Primary Agent / Memory / Mission
+不隐藏调用模型产生费用
+不因一个 Runtime 缺失阻止另一个 Runtime 使用
+安装失败可以重试或回滚
+```
+
+# 601. v0.43 Decision Log — Linux Bootstrap / Runtime Installation
+
+## D-552 — Workbench, DeepSeek and Codex Have Independent Installation Lifecycles
+
+**决定：** Workbench/workbenchd、DeepSeek Harness、Codex Harness 分别安装和升级；任何一方升级不得隐式替换另外两方。
+**状态：** Accepted
+
+## D-553 — Linux MVP Prefers User-scoped Managed Runtime Slots
+
+**决定：** Workbench 推荐把受支持 Runtime 安装到用户级独立 Version Slot，以支持 Pin、Side-by-side、Canary 与 Last-Good；禁止默认修改 `/usr/bin` 或全局 npm state。
+**状态：** Accepted
+
+## D-554 — External Runtime Installations Remain Supported but User-owned
+
+**决定：** PATH/Custom Path 中的 DeepSeek/Codex 可作为 External Installation 使用；Workbench 只 Probe/Bind，不覆盖、不自动升级。
+**状态：** Accepted
+
+## D-555 — Codex Managed Mode Prefers Official Standalone Linux Distribution
+
+**决定：** 在官方 standalone Linux binary 可用时，Managed Codex 优先采用精确版本的官方独立安装物，而非默认执行全局 npm 安装；External npm installation 仍兼容。
+**状态：** Accepted
+
+## D-556 — DeepSeek Installation Is Provider-driven Because Upstream Is Still Compatibility-volatile
+
+**决定：** DeepSeek Harness 通过 RuntimeInstallerProvider 管理 exact version + prerequisite；MVP 允许显式 Node prerequisite 和 user-scoped npm package slot，不假设稳定 standalone binary，也不把社区 Desktop package 作为核心真源。
+**状态：** Accepted
+
+## D-557 — No Hidden sudo or Remote Shell Install Pipeline
+
+**决定：** Runtime 安装不通过 Agent 生成或后台执行 `curl | sh` / `sudo` 链；需要系统依赖时显式向用户展示原因和受控步骤。
+**状态：** Accepted
+
+## D-558 — One READY Core Runtime Is Enough to Enter the Product
+
+**决定：** 首次使用只要求 DeepSeek/Codex 中至少一个 READY；另一个可后续设置，产品进入 Partial Capability 而非阻断。
+**状态：** Accepted
+
+## D-559 — Bootstrap Is Durable and Resumable
+
+**决定：** First-run 每个 Stage 持久化结果与 Receipt；App/机器重启后从最近可靠阶段继续，禁止整个 Setup 从头重来。
+**状态：** Accepted
+
+## D-560 — Default Smoke Tests Are Local and Zero-token
+
+**决定：** 安装后默认只执行本地 protocol/capability/contract 测试，不为了“确认模型能回答”自动产生云 Token；真实 Cloud Test 需显式触发或发生在用户第一条正常消息。
+**状态：** Accepted
+
+## D-561 — Runtime Activation Requires Capability and Contract Compatibility, Not Version String Alone
+
+**决定：** Version 是输入之一，但 Activation 还必须考虑 Protocol/Schema/Capability/Auth/Permission/Error/Resume Contract；高风险未验证能力默认关闭。
+**状态：** Accepted
+
+## D-562 — Managed Runtime Updates Are Slot-based and Transactional
+
+**决定：** 新版下载到独立 staging/version slot，验证通过后原子激活；Active binary 不被原地覆盖，Last-Good 在 Retention 允许范围内保留。
+**状态：** Accepted
+
+## D-563 — GUI Runtime Discovery Must Not Source Arbitrary Shell Startup Scripts
+
+**决定：** 为解决 Linux GUI PATH 差异使用确定性的 ExecutableResolver/known paths/custom path；禁止通过 `source ~/.bashrc` 等方式执行任意 shell 初始化副作用来寻找 Runtime。
+**状态：** Accepted
+
+## D-564 — Runtime Installer Is Deterministic Infrastructure, Not an Agent Skill
+
+**决定：** Agent 可通过强类型 Control Tool 请求安装/探测，但 URL、版本、校验、Slot、激活、Rollback 由 RuntimeInstallationManager 决定性执行，模型不成为软件包安装器。
+**状态：** Accepted
+
+## D-565 — Package Channels Are Phased, Not a Linux Coverage Race
+
+**决定：** 首版优先 `.deb + AppImage`，RPM 作为近阶段次级支持；AUR/Flatpak/Snap 后移。支持矩阵由真实 CI/安装测试定义，不以“理论上 Tauri 能打包”代替 QA。
+**状态：** Accepted
+
+## D-566 — Workbench App Update and Runtime Update Use Separate Drain/Rollback Paths
+
+**决定：** Desktop/workbenchd 更新与 Harness 更新拥有独立状态机；更新时有活跃 Mission 必须 Drain/Checkpoint/Park，不允许互相级联覆盖。
+**状态：** Accepted
+
+---
+
+# 602. v0.44 目标：把“能恢复任务”提升为“数据本身长期可靠”
+
+前面的 Recovery 解决的是：
+
+```text
+Run / Harness / 网络出问题以后
+怎样继续 Mission
+```
+
+这一轮解决的是更底层的问题：
+
+```text
+Workbench 自己的数据
+到底放在哪里？
+怎样事务提交？
+升级以后怎样迁移？
+数据库坏了怎么办？
+备份恢复以后哪些东西仍然有效？
+```
+
+必须明确：
+
+> **Runtime Recovery 不能代替 Data Recovery。**
+
+即使 Codex / DeepSeek 都能 Resume，如果 `Agent Memory / Task / Decision / Conversation / Event / Receipt` 的本地真源已经损坏，Mission 仍然无法可靠恢复。
+
+因此 Linux MVP 把本地数据划分为五个耐久等级：
+
+| 等级 | 含义 | 典型数据 | 是否允许自动丢弃 |
+|---|---|---|---|
+| `D0_CANONICAL` | 不可从其他地方可靠重建的用户/产品真源 | Agent Instance、Private Memory、Conversation、Room、Mission、Task、Decision、Knowledge、配置元数据 | 否 |
+| `D1_DURABLE_EVIDENCE` | 审计、恢复、对账所需的语义证据 | Workbench Event、CommandReceipt、RecoveryReceipt、MaterializationReceipt、DataEgressReceipt、ChangeSet 元数据 | 仅按明确 Retention/Compaction 规则 |
+| `D2_REBUILDABLE_PROJECTION` | 可由 D0/D1 重建 | ProjectControlProjection、RoomProjection、Usage Aggregates、Search Document Projection | 是 |
+| `D3_CACHE` | 为性能存在 | Preview、thumbnail、parsed cache、HTTP/cache、Materialization cache | 是 |
+| `D4_EPHEMERAL` | 调试与临时运行数据 | tmp、staging、短期 raw logs、download partial | 是 |
+
+这套等级后续直接决定：
+
+```text
+备份包含什么
+磁盘压力先删什么
+损坏以后先恢复什么
+Support Bundle 能带什么
+```
+
+---
+
+# 603. Linux 数据目录遵循 XDG，而不是把所有东西塞进一个隐藏目录
+
+MVP 建议：
+
+```text
+$XDG_DATA_HOME/team-workbench/
+    profiles/default/
+        workbench.sqlite3
+        objects/
+        backups/
+        managed-packages/
+
+$XDG_CACHE_HOME/team-workbench/
+    previews/
+    parser-cache/
+    materialization-cache/
+    search/
+
+$XDG_STATE_HOME/team-workbench/
+    logs/
+    crash/
+    diagnostics/
+
+$XDG_CONFIG_HOME/team-workbench/
+    config.toml
+    provider-policy.toml
+    runtime-policy.toml
+
+$XDG_RUNTIME_DIR/team-workbench/
+    workbenchd.sock
+    locks/
+    pid/
+```
+
+API Key / Token 不进入上述目录，继续进入：
+
+```text
+Linux Secret Service / Runtime-native Auth
+```
+
+Workspace 文件继续位于用户自己的 Workspace Provider 中，不复制进 Workbench Data Home。
+
+这样明确分开：
+
+```text
+Product Data
+Cache
+Operational State
+Config
+Runtime IPC
+Secret
+Workspace Bytes
+```
+
+---
+
+# 604. `workbenchd` 是 Canonical DB 的唯一写者
+
+Linux MVP 不允许：
+
+```text
+Tauri UI 直接打开 SQLite
+DeepSeek Adapter 直接改 SQLite
+Codex Adapter 直接改 SQLite
+Plugin Worker 直接改 SQLite
+```
+
+统一为：
+
+```text
+Tauri UI
+Runtime Adapter
+Parser Worker
+Plugin Host
+      │
+      ▼
+Local IPC / Typed Command
+      │
+      ▼
+workbenchd
+      │
+      ▼
+Canonical Repository Layer
+      │
+      ▼
+workbench.sqlite3
+```
+
+收益：
+
+```text
+单写者
+事务边界清楚
+Migration 只有一个 Owner
+不需要多个进程争抢 schema lock
+更容易做 idempotency / expectedRevision
+更容易做 Backup / Restore Drain
+```
+
+启动时使用 OS-level profile lock / flock，保证同一个 Profile 不出现两个 active `workbenchd` writer。
+
+第二个 Desktop 进程发现已有 daemon：
+
+```text
+连接已有 workbenchd
+```
+
+而不是再启动第二个数据库写者。
+
+---
+
+# 605. MVP 优先使用一个 Canonical SQLite，而不是过早拆成十几个数据库
+
+为了保证：
+
+```text
+Domain State
++
+Semantic Event
++
+CommandReceipt
+```
+
+能够在同一个 ACID transaction 中提交，MVP 建议使用：
+
+```text
+workbench.sqlite3
+```
+
+统一存放关键结构化数据。
+
+原因不是 SQLite 只能做一个文件，而是过早拆成：
+
+```text
+agent.db
+memory.db
+mission.db
+event.db
+knowledge.db
+```
+
+会立刻引入跨库一致性、跨库 Migration、Backup Cut 与恢复顺序问题。
+
+尤其在 WAL 模式下，不应该依赖多个独立 SQLite 文件实现跨库原子事务。
+
+首版原则：
+
+> **先用一个 Canonical DB 获得清晰的一致性边界；只有 Benchmark 明确证明某一域必须拆分时再 Shard。**
+
+---
+
+# 606. “Event Store 是真源”进一步收紧为 Execution Truth，不强行全量 Event Sourcing
+
+前文一直强调 Workbench Event Store 是产品执行层真源，这一轮做一个必要的精确定义：
+
+```text
+Runtime Native Event
+= 外部执行证据
+
+Workbench Semantic Event
+= Workbench 承认的执行事实 / 状态迁移证据
+
+Canonical Domain Row
+= 当前有效状态
+```
+
+例如 Task 完成时：
+
+```text
+BEGIN TRANSACTION
+
+UPDATE task
+SET status = 'SUCCEEDED', revision = revision + 1
+
+INSERT workbench_event(
+  type = 'task.succeeded', ...
+)
+
+INSERT receipt(...)
+
+COMMIT
+```
+
+所以：
+
+> **Task 当前状态和 Workbench Semantic Event 必须原子一致。**
+
+但不要求整个 Workbench 采用纯 Event Sourcing：
+
+```text
+Agent Definition
+Memory Revision
+Knowledge Record
+Project Settings
+```
+
+仍然有自己的 Canonical Domain Table。
+
+Event Store 主要承担：
+
+```text
+执行事实
+状态迁移证据
+审计
+Timeline
+Projection 增量源
+恢复对账
+```
+
+这样避免为了“架构纯洁”把所有对象都做成必须回放几百万 Event 才能恢复当前状态。
+
+---
+
+# 607. SQLite 写入策略：语义提交优先，Streaming 不逐 Token 落事务
+
+建议默认：
+
+```text
+journal_mode = WAL
+foreign_keys = ON
+busy_timeout = bounded
+```
+
+Canonical Transaction 以可靠性优先。
+
+但严格禁止：
+
+```text
+模型每输出一个 token
+→ SQLite COMMIT 一次
+```
+
+Streaming 使用：
+
+```text
+in-memory / bounded buffer
+        ↓
+coalesced stream checkpoint
+        ↓
+semantic boundary commit
+```
+
+例如：
+
+```text
+Turn Started
+Tool Requested
+Approval Waiting
+Tool Completed
+Turn Completed
+Run Checkpoint
+```
+
+这些才是 durable boundary。
+
+低层 token delta / progress heartbeat 属于高频 telemetry，可以批处理、合并或只保留短期日志。
+
+正式实现前针对 `synchronous=FULL` 与 `NORMAL` 做真实 SSD/HDD Benchmark；Canonical 安全优先，不能为了漂亮 benchmark 静默牺牲断电语义。
+
+---
+
+# 608. 大对象与二进制不塞进主 SQLite
+
+主库保存：
+
+```text
+metadata
+stable IDs
+revision
+content hash
+small/medium text records
+ResourceRef
+ObjectRef
+```
+
+而下面这些默认不作为 SQLite BLOB 长期堆积：
+
+```text
+完整视频
+图片原件
+PDF 原件
+.blend
+大型 Tool stdout
+Runtime trace dump
+Preview proxy
+large parser artifact
+```
+
+使用：
+
+```text
+objects/<content-hash>
+```
+
+或现有 Workspace / Cache 中的 ResourceRef。
+
+每个 sidecar 都明确属于：
+
+```text
+CANONICAL_OBJECT
+DURABLE_EVIDENCE_OBJECT
+CACHE_OBJECT
+EPHEMERAL_OBJECT
+```
+
+数据库只保存 Object Manifest。
+
+这样数据库备份不会因为一次 `cargo test` 输出 200MB 日志变成几 GB。
+
+---
+
+# 609. Agent Private Memory 继续共享基础设施，但数据库查询必须强制带 Namespace
+
+Memory 继续遵守此前硬规则：
+
+```text
+Agent A → memory://agent/A
+Agent B → memory://agent/B
+```
+
+物理层可以共同存在于 `workbench.sqlite3`，但逻辑层禁止出现：
+
+```text
+memory.search(query)
+```
+
+这种没有调用主体的 Repository API。
+
+必须类似：
+
+```text
+memory.search(
+  agent_id,
+  namespace_id,
+  query,
+  scope
+)
+```
+
+Memory Table / Index 使用：
+
+```text
+namespace_id
+agent_id
+memory_id
+revision
+```
+
+作为关键约束的一部分。
+
+测试必须包含：
+
+```text
+Agent A query
+绝不能返回 Agent B private rows
+```
+
+即使两个 Agent 使用同一个 DeepSeek/Codex Runtime、同一个 Project、同一个 Room，也不改变这条边界。
+
+---
+
+# 610. Event / Receipt 会增长，因此区分 Semantic Event 与 Telemetry
+
+不能几年以后：
+
+```text
+5 亿 token delta
+3 亿 heartbeat
+```
+
+全部永久存入 Canonical Event Store。
+
+定义：
+
+```text
+SEMANTIC_EVENT
+```
+
+例如：
+
+```text
+task.started
+task.completed
+handoff.created
+approval.waiting
+runtime.recovered
+workspace.changed
+review.requested
+mission.replanned
+```
+
+默认长期保留。
+
+而：
+
+```text
+TELEMETRY_EVENT
+```
+
+例如：
+
+```text
+stream delta
+progress tick
+low-level reconnect attempt
+native debug trace
+```
+
+可以：
+
+```text
+coalesce
+roll up
+TTL
+rotate
+```
+
+Run 完成以后允许形成：
+
+```text
+TelemetrySummaryReceipt
+```
+
+保留关键统计后清理高频细节。
+
+这同时降低：
+
+```text
+DB size
+Backup size
+Projection rebuild time
+```
+
+---
+
+# 611. Schema Migration 必须由 workbenchd 独占执行
+
+主库维护：
+
+```text
+schema_version
+migration_history
+created_with_version
+last_migrated_with_version
+```
+
+每次升级流程：
+
+```text
+Workbench new version starts
+        ↓
+workbenchd acquires exclusive migration lease
+        ↓
+Check DB schema
+        ↓
+Preflight
+  free disk
+  integrity
+  supported upgrade path
+        ↓
+Create pre-migration backup
+        ↓
+Apply migration
+        ↓
+Validate invariants
+        ↓
+Commit schema version
+        ↓
+Open normal service
+```
+
+UI 在 Migration 期间只显示：
+
+```text
+DATA UPGRADE
+Migrating local workspace data…
+```
+
+不允许旧 UI 与新 DB Schema 混写。
+
+---
+
+# 612. 大型 Migration 使用 Shadow / Expand-Contract，不在中途留下半升级数据库
+
+简单 migration：
+
+```text
+一个 SQLite transaction
+```
+
+即可。
+
+如果未来数据量很大：
+
+```text
+重写百万 Memory rows
+重建大型 Event table
+改变 content projection format
+```
+
+不能把用户卡在一个几小时不可回滚的 transaction。
+
+采用：
+
+```text
+old table
+   ↓
+shadow new table
+   ↓
+chunked migration + checkpoint
+   ↓
+validation
+   ↓
+short atomic cutover
+```
+
+在最终 cutover 之前：
+
+```text
+旧 schema 仍完整
+```
+
+Migration 本身也可以断点恢复。
+
+---
+
+# 613. App Rollback 不等于 DB Downgrade
+
+例如：
+
+```text
+Workbench 1.5
+Schema 42
+        ↓
+升级
+Workbench 1.6
+Schema 45
+```
+
+后来 1.6 App 有 bug。
+
+不能简单：
+
+```text
+启动 Workbench 1.5
+直接读取 Schema 45
+```
+
+除非明确声明兼容。
+
+因此升级前保存：
+
+```text
+PreMigrationSnapshot
+```
+
+如果需要完整 Rollback：
+
+```text
+App binary rollback
++
+DB snapshot rollback
+```
+
+作为同一 Rollback Plan。
+
+**MVP 不承诺任意 Schema 的自动 Down Migration。**
+
+相比写大量危险的逆向 migration，恢复升级前 snapshot 更可靠。
+
+---
+
+# 614. 自动备份使用 SQLite Online Backup / 受控 Snapshot，不直接复制活跃 WAL 文件
+
+禁止：
+
+```text
+cp workbench.sqlite3 backup.sqlite3
+```
+
+然后忽略 WAL / checkpoint 状态。
+
+备份由 `workbenchd` 统一协调：
+
+```text
+Online Backup / consistent snapshot
+        ↓
+Backup Manifest
+        ↓
+Checksum
+        ↓
+Optional Compression
+        ↓
+Atomic publish
+```
+
+触发点至少包括：
+
+```text
+重大 schema migration 前
+Workbench major/minor data upgrade 前
+用户手动 Create Backup
+定期 idle backup
+```
+
+备份过程不需要调用模型，Token 消耗为 0。
+
+---
+
+# 615. Workbench Backup 不等于 Workspace Backup
+
+默认 Workbench Backup 包含：
+
+```text
+Agent definitions / instances
+Private Memory
+Conversation
+Room / Mission / Task
+Project metadata
+Requirement / Decision / Knowledge
+Event / Receipt
+Usage / Budget
+Workbench config metadata
+Custom policy metadata
+必要 canonical object sidecars
+```
+
+默认不包含：
+
+```text
+Workspace 原始文件
+Git repository bytes
+大型视频 / 3D 原件
+Search Index
+Preview Cache
+Raw transient logs
+Managed Runtime binary
+DeepSeek/Codex Session
+API Key / Password / Secret Service data
+```
+
+因此恢复后可能出现：
+
+```text
+Project restored
+Workspace needs rebind
+Runtime needs reconnect
+Provider needs reauth
+```
+
+这不是恢复失败，而是正确边界。
+
+如果用户未来需要“一键整机迁移”，应该是：
+
+```text
+Workbench Backup
++
+Workspace Backup / Sync
++
+Credential Re-auth
+```
+
+三个系统组合，而不是把 2TB Workspace 塞进一个 Workbench `.backup` 文件。
+
+---
+
+# 616. Portable Backup 包含 Private Memory，因此必须按敏感数据处理
+
+本地自动备份：
+
+```text
+user-only filesystem permission
+不进入 Sync
+不进入 Support Bundle
+```
+
+如果用户选择：
+
+```text
+Export Portable Backup
+```
+
+则 UI 必须明确提示：
+
+```text
+This backup contains private Agent memory,
+conversation history and project metadata.
+```
+
+Portable Backup 后续实现应默认支持加密容器 / 用户密码或设备密钥保护；Linux MVP 即使暂不做复杂跨设备同步，也不能把明文完整 Memory Backup 当普通 ZIP 四处导出。
+
+Credential Secret 本身仍然不进入 Portable Backup。
+
+---
+
+# 617. Restore 采用 Staging + Validation + Atomic Cutover
+
+禁止：
+
+```text
+把 backup 解压到当前 data dir
+边解压边覆盖 live DB
+```
+
+恢复流程：
+
+```text
+Select Backup
+    ↓
+Read Manifest
+    ↓
+Verify checksum / supported format
+    ↓
+Restore to staging profile
+    ↓
+SQLite integrity check
+    ↓
+Migrate staging DB to current schema
+    ↓
+Domain invariant validation
+    ↓
+Rebuild required projection/index
+    ↓
+Stop admission / drain current profile
+    ↓
+Atomic profile switch
+    ↓
+Boot Recovery Sweep
+```
+
+如果任何阶段失败：
+
+```text
+当前 live profile 不变
+```
+
+用户不会因为一个损坏备份把原本能用的数据也覆盖掉。
+
+---
+
+# 618. Restore 后 RuntimeBinding / Approval / Lease 必须默认失效重新验证
+
+备份中可能保存：
+
+```text
+Mission RUNNING
+Task RUNNING
+RuntimeBinding CB-82
+Approval A-19 WAITING
+```
+
+但恢复发生时：
+
+```text
+原 Codex Thread 可能不存在
+原 DeepSeek Session 可能过期
+原 Run Lease 肯定不应该继续生效
+原 Native Approval 不能再直接批准
+```
+
+因此 Restore 后：
+
+```text
+所有 active Run Lease
+→ EXPIRED_RESTORE
+
+所有 RuntimeBinding
+→ NEEDS_REVALIDATION
+
+所有 Native Approval
+→ STALE / REVALIDATE
+
+非终态 Mission / Task
+→ RECOVERY_REQUIRED / PARKED
+```
+
+然后走已有：
+
+```text
+Boot Recovery Sweep
+Recovery Capsule
+Workspace Reconciliation
+```
+
+绝对不因为 DB 里写着 `RUNNING` 就自动重新发起同一 Side-effect Turn。
+
+---
+
+# 619. Restore 后 Workspace 采用 Rebind，不复制或猜路径
+
+Workspace Registry 保存稳定：
+
+```text
+workspace_id
+provider type
+root identity / path hint
+provider metadata
+```
+
+恢复到同一台机器：
+
+```text
+原路径仍存在
+→ probe / rebind
+```
+恢复到另一台机器：
+
+```text
+路径不存在
+→ WORKSPACE_NEEDS_REBIND
+```
+
+UI 显示：
+
+```text
+Project restored
+
+Workspace
+Workbench Repo
+Missing
+
+[Locate Workspace]
+[Clone / Mount]
+[Keep Offline]
+```
+
+Workbench 不应该根据旧绝对路径偷偷创建一个空目录并假装 Workspace 已恢复。
+
+---
+
+# 620. Credential 恢复采用 Re-auth，不恢复 Secret
+
+由于备份只保存：
+
+```text
+credentialRef / provider association
+```
+
+不保存 Secret 值，恢复后：
+
+```text
+Secret Service 中存在对应 credential
+→ READY
+
+不存在
+→ NEEDS_REAUTH
+```
+
+例如：
+
+```text
+Codex
+Authentication required
+
+DeepSeek
+Runtime-native auth ready
+```
+
+模型、Agent、Migration 脚本都不参与 Secret 恢复。
+
+---
+
+# 621. 数据损坏时先 Quarantine 原始文件，再恢复 Last-Good
+
+启动发现：
+
+```text
+SQLite malformed
+checksum mismatch
+impossible invariant
+```
+
+不能立刻：
+
+```text
+删除坏库
+创建空库
+```
+
+正确流程：
+
+```text
+STOP WRITES
+    ↓
+copy/rename corrupt profile to forensic quarantine
+    ↓
+record CorruptionReceipt
+    ↓
+try read-only integrity/recovery diagnostics
+    ↓
+locate Last-Good Backup
+    ↓
+restore to staging
+    ↓
+validate
+    ↓
+activate
+```
+
+如果没有可用备份：
+
+```text
+只读 Emergency Mode
+```
+
+尽可能导出仍可读取的：
+
+```text
+Agent definition
+Conversation
+Memory
+Decision
+Project metadata
+```
+
+但 UI 必须诚实说明：
+
+> 最近一次备份以后、且无法从损坏数据库读取的事务可能无法恢复。
+
+不宣称不存在现实的数据损失可能。
+
+---
+
+# 622. Projection / Search 损坏不进入 Disaster Recovery
+
+例如：
+
+```text
+Tantivy index corrupt
+ProjectControlProjection invalid
+Thumbnail cache broken
+```
+
+这不是 Canonical Data Corruption。
+
+正确处理：
+
+```text
+mark projection/index invalid
+      ↓
+continue serving canonical data
+      ↓
+background rebuild
+```
+
+UI 可以暂时：
+
+```text
+Search index rebuilding…
+Project summary refreshing…
+```
+
+而不是：
+
+```text
+整个 Workbench 无法启动
+```
+
+这正是 `D0/D1` 与 `D2/D3` 分级存在的价值。
+
+---
+
+# 623. Backup / Migration / Restore 也必须有 Receipt
+
+新增：
+
+```text
+BackupReceipt
+MigrationReceipt
+RestoreReceipt
+CorruptionReceipt
+```
+
+例如：
+
+```text
+RESTORE RECEIPT
+
+Backup
+B-2026-08-29-01
+
+Source Schema
+42
+
+Target Schema
+45
+
+Integrity
+PASS
+
+Canonical DB
+RESTORED
+
+Search Index
+REBUILT
+
+Credentials
+2 READY
+1 NEEDS_REAUTH
+
+Workspaces
+3 READY
+1 NEEDS_REBIND
+
+Active Missions
+2 PARKED_RECOVERY
+
+Result
+SUCCESS
+```
+
+这样恢复不是：
+
+> “看起来应该好了。”
+
+而是有机器可验证结果。
+
+---
+
+# 624. 数据层性能预算与故障注入
+
+正式实现前至少验证：
+
+```text
+100k Conversations / Messages projection
+1M Semantic Events
+10M compact telemetry summary source rows（或等效压力）
+100k Memory records
+10k Tasks
+大量 concurrent Runtime event ingestion
+```
+
+并故障注入：
+
+```text
+COMMIT 前 kill workbenchd
+COMMIT 后 response 丢失
+WAL 未 checkpoint 时机器 crash
+Migration 中 kill process
+Backup 中 kill process
+Restore staging 中 kill process
+磁盘空间耗尽
+磁盘变 read-only
+Search index corrupt
+Canonical DB corrupt sample
+旧 App 读取新 Schema
+新 App 读取旧 Schema
+```
+
+验收重点：
+
+```text
+没有 silent partial migration
+没有 duplicate command effect
+live profile 不被失败 restore 覆盖
+Canonical data 和 Semantic Event 不出现已提交一边、缺失另一边
+Search/Projection 可以重建
+Backup 不包含 Secret
+Restore 不复活旧 Run Lease / Approval
+```
+
+---
+
+# 625. v0.44 Decision Log — Durable Data / Migration / Backup / Restore
+
+## D-567 — workbenchd Is the Single Canonical Database Writer
+
+**决定：** Linux MVP 中 Tauri UI、Runtime Adapter、Plugin/Parser Worker 不直接写 Canonical SQLite；所有持久修改经 workbenchd Typed Repository/Command Layer 完成。同一 Profile 只允许一个 active writer daemon。  
+**状态：** Accepted
+
+## D-568 — MVP Uses One Canonical SQLite Database Before Sharding
+
+**决定：** Agent/Memory/Conversation/Room/Mission/Task/Knowledge/Event/Receipt 等结构化 D0/D1 数据优先共用一个 Canonical SQLite，以获得单事务一致性；不因概念域多就预先拆成多个 WAL 数据库。  
+**状态：** Accepted
+
+## D-569 — Canonical Domain State and Semantic Events Commit Atomically
+
+**决定：** Workbench Semantic Event 是执行事实与状态迁移证据；Domain Row 是当前有效状态。关键状态变更必须在同一 SQLite transaction 中同时更新 Domain State、Event 与必要 Receipt，避免 dual-write divergence。  
+**状态：** Accepted
+
+## D-570 — Workbench Does Not Require Pure Event Sourcing
+
+**决定：** Event Store 不被扩大为“所有对象只能靠事件回放重建”的纯 Event Sourcing 架构；Agent Definition、Memory、Knowledge、Settings 等继续维护 Canonical Domain Tables，Event 负责执行事实、审计、Timeline、Projection 与恢复证据。  
+**状态：** Accepted
+
+## D-571 — Data Durability Classes Drive Retention and Recovery
+
+**决定：** 数据明确分为 D0 Canonical、D1 Durable Evidence、D2 Rebuildable Projection、D3 Cache、D4 Ephemeral；磁盘压力、备份、恢复与 Support Bundle 必须遵守该分级。  
+**状态：** Accepted
+
+## D-572 — High-frequency Streaming Telemetry Is Not a Per-token Durable Transaction
+
+**决定：** token delta、progress tick、debug reconnect 等高频 telemetry 批处理/合并/TTL；Task/Tool/Approval/Run 等语义边界才形成 durable commits，避免 SQLite、备份与 Event Store 被流式噪声淹没。  
+**状态：** Accepted
+
+## D-573 — Large Binary and Raw Runtime Payloads Stay Outside Canonical SQLite
+
+**决定：** Workspace 原件、视频/3D/PDF、Preview、大型 Tool Output 与 Runtime dump 不长期作为主库 BLOB；使用 ResourceRef/ObjectRef + sidecar，并按 Canonical/Evidence/Cache/Ephemeral 标记耐久性。  
+**状态：** Accepted
+
+## D-574 — Agent Private Memory Is Logically Isolated Even in Shared Physical Storage
+
+**决定：** 每个 Memory Repository 操作必须显式携带 `agent_id + namespace_id`；共享 SQLite/索引基础设施不得形成未作用域的跨 Agent private-memory search API。  
+**状态：** Accepted
+
+## D-575 — Schema Migration Is Exclusive, Versioned and Preflighted
+
+**决定：** Schema Migration 只由 workbenchd 在 exclusive migration lease 下执行；记录 Migration Ledger，并在破坏性/重大 migration 前检查完整性、磁盘空间与支持路径且创建 PreMigrationSnapshot。  
+**状态：** Accepted
+
+## D-576 — Large Migrations Prefer Shadow/Expand-Contract and Atomic Cutover
+
+**决定：** 无法在合理时间单事务完成的大型数据重写采用 shadow table / chunked checkpoint / validation / short cutover；Migration 崩溃不得留下半新半旧的 live schema。  
+**状态：** Accepted
+
+## D-577 — Application Rollback Does Not Imply Automatic Database Down-migration
+
+**决定：** MVP 不承诺任意 Schema 自动降级；需要回滚不兼容 App 时使用对应 PreMigrationSnapshot 恢复 DB，与 App Last-Good 形成一致的 Rollback Plan。  
+**状态：** Accepted
+
+## D-578 — Backups Use Consistent Online Snapshot, Not Naive Live-file Copy
+
+**决定：** Canonical SQLite 备份由 workbenchd 使用一致性 Online Backup/Snapshot 机制协调并写 Manifest/Checksum；禁止把正在 WAL 运行的主库当普通文件直接复制后宣称备份有效。  
+**状态：** Accepted
+
+## D-579 — Workbench Backup and Workspace Backup Are Separate Products
+
+**决定：** Workbench Backup 保存 Agent/Memory/Conversation/Mission/Knowledge/Event/Receipt 等产品数据；Workspace 原始字节、Git repo、媒体原件由 Workspace Provider/Version/Sync 负责，不默认塞入 Workbench Backup。  
+**状态：** Accepted
+
+## D-580 — Secrets and Runtime Sessions Are Never Restored as Durable Backup State
+
+**决定：** API Key/Password/Secret Service 值、DeepSeek/Codex native session/thread、live Approval/Run Lease 不进入可移植 Workbench Backup；恢复后分别执行 Re-auth、Runtime Revalidation 与 Recovery Sweep。  
+**状态：** Accepted
+
+## D-581 — Restore Is Staged and Must Not Overwrite a Healthy Live Profile Before Validation
+
+**决定：** Restore 先进入 staging profile，完成 checksum、SQLite integrity、schema migration、domain validation 与必要 projection rebuild 后才原子切换；失败 restore 不修改当前 live profile。  
+**状态：** Accepted
+
+## D-582 — Restore Invalidates Active Leases, Bindings and Native Approvals
+
+**决定：** Restore 后所有非终态 Run 必须进入 Recovery Required/Parked；旧 Run Lease/Epoch、RuntimeBinding 与 native Approval 默认失效并重新验证，禁止恢复数据库后直接 Replay Side-effect Turn。  
+**状态：** Accepted
+
+## D-583 — Missing Workspace Is Rebound Explicitly, Never Fabricated
+
+**决定：** Restore 后原 Workspace root 不存在时进入 `WORKSPACE_NEEDS_REBIND`；用户/Provider 明确 Locate/Clone/Mount 后才恢复执行，不自动创建同名空目录冒充原 Workspace。  
+**状态：** Accepted
+
+## D-584 — Canonical Corruption Is Quarantined Before Recovery
+
+**决定：** 检测到 Canonical DB 损坏时先停止写入并隔离原始损坏数据，保留 forensic copy，再尝试诊断/Last-Good Restore；禁止静默删除坏库并创建空 Profile。  
+**状态：** Accepted
+
+## D-585 — Projection/Index Corruption Is Rebuildable Degradation, Not Full Disaster
+
+**决定：** Search Index、Project/Room Projection、Preview Cache 等 D2/D3 损坏时标记失效并后台重建，Canonical 功能继续服务；只有 D0/D1 真源损坏才进入数据灾难恢复。  
+**状态：** Accepted
+
+---
+
+# 626. v0.45 目标：把“功能很多”收口成一个真正可工作的 Linux 桌面信息架构
+
+到 v0.44 为止，产品已经拥有 Agent、Project、Room、Mission、Workspace、Knowledge、Memory、Skill/Plugin、Attention、Runtime Glass Box、Usage/Cost 等大量一等对象。
+
+如果每一种对象都直接变成一级导航，最终会出现：
+
+```text
+Agent
+Memory
+Skills
+Plugins
+Project
+Mission
+Room
+Workspace
+Knowledge
+Decision
+Artifact
+Attention
+Usage
+Runtime
+...
+```
+
+这会让 Workbench 变成“功能目录”，而不是工作台。
+
+v0.45 的目标不是再增加页面，而是确定：
+
+```text
+用户进入应用第一眼看到什么？
+用户怎样从聊天进入工作？
+Project / Room / Mission / Workspace 之间怎样跳转？
+哪些是一级 Surface？
+哪些只是对象详情或 Inspector？
+复杂执行信息怎样按需展开而不压垮普通用户？
+```
+
+核心原则：
+
+> **Primary Surface 少而稳定，Secondary Studio 按对象进入，Execution Detail 按需展开。**
+
+---
+
+# 627. 最终 Linux App Shell：四区壳层，而不是传统 SaaS Sidebar + Cards
+
+Linux Desktop 主窗口采用统一四区：
+
+```text
+┌────────────┬────────────────────┬────────────────────────────────────┬──────────────────┐
+│ GLOBAL     │ CONTEXT            │ PRIMARY STAGE                      │ INSPECTOR        │
+│ RAIL       │ RAIL               │                                    │ / LIVE SIGNAL    │
+│            │                    │ 当前真正工作现场                   │                  │
+│ 01 AGENT   │ Conversation       │ Chat / Project / Room / Explorer   │ Runtime          │
+│ 02 PROJECT │ Work / Room        │ Mission Focus / Studio             │ Task             │
+│ 03 ROOMS   │ Project Tree       │                                    │ Attention        │
+│ 04 WORKSP. │ Recent / Filter    │                                    │ Cost / Context   │
+│ 05 LIBRARY │                    │                                    │                  │
+│ 06 SYSTEM  │                    │                                    │                  │
+└────────────┴────────────────────┴────────────────────────────────────┴──────────────────┘
+```
+
+其中：
+
+```text
+Global Rail
+= 稳定的一级产品域
+
+Second Rail
+= 在 AGENT 下是 `MY WORK`；在其他一级域下才是该域的 Context Rail
+
+Primary Stage
+= 用户当前真正阅读、对话、执行或浏览的主区域
+
+Inspector / Live Signal
+= 当前对象的运行状态与可展开详情
+```
+
+四区并不是四列永远都必须显示。
+
+Inspector 可以：
+
+```text
+AUTO
+PINNED
+HIDDEN
+```
+
+Context Rail 也允许在窄窗口下折叠。
+
+因此这是一个**布局模型**，不是固定像素模板。
+
+## 627.1 路线 3：Agent-centered Hybrid Shell
+
+v0.45.1 正式选择混合版，而不是把所有一级域做成完全等权的“工具平台”。
+
+默认启动：
+
+```text
+GLOBAL RAIL      MY WORK              PRIMARY STAGE              LIVE SIGNAL
+01 AGENT         Needs You            My Agent / Conversation     Agent
+02 PROJECTS      Running              Work Capsule                Runtime
+03 ROOMS         Continue Work        Mission / Explorer          Task
+04 WORKSPACE     Conversations                                    Cost
+05 LIBRARY       Rooms                                            Attention
+06 SYSTEM        Recent
+```
+
+这里最重要的不是多一列，而是产品重心：
+
+> **My Agent 是入口；Projects / Rooms / Workspace 是它与用户进入专业工作的空间。**
+
+当用户切换一级域时，第二栏才改变语义：
+
+```text
+AGENT      → MY WORK
+PROJECTS   → PROJECT CONTEXT
+ROOMS      → ROOM CONTEXT
+WORKSPACE  → EXPLORER NAVIGATION
+LIBRARY    → LIBRARY CONTEXT
+SYSTEM     → SYSTEM CONTEXT
+```
+
+因此六个一级域仍然存在，但只有 AGENT Surface 具有“个人工作总览 + 对话入口”的特殊地位。这样既不会退化成单一聊天产品，也不会让 Agent 在一个复杂工具平台里失去中心感。
+
+---
+
+# 628. 一级导航正式冻结为六个 Product Surfaces
+
+Linux MVP 一级导航建议固定为：
+
+```text
+01  AGENT
+02  PROJECTS
+03  ROOMS
+04  WORKSPACE
+05  LIBRARY
+06  SYSTEM
+```
+
+## 01 AGENT
+
+默认 Home，也是 Personal Primary Agent 的聊天与自然语言控制入口。
+
+## 02 PROJECTS
+
+进入 Project Control Center，并从 Project 内继续进入 Work、Mission、Knowledge、Decision、Artifact 等对象。
+
+## 03 ROOMS
+
+进入 Agent Room / Team Collaboration。Mission 可以从 Room 内创建和运行，但 Mission 不单独成为一级导航。
+
+## 04 WORKSPACE
+
+进入 Windows Explorer-grade Workspace Explorer，并支持 Project/Workspace Scope Selector。
+
+## 05 LIBRARY
+
+统一管理：
+
+```text
+Agents
+Skills
+Plugins
+Agent Definitions / Packages
+```
+
+Memory 不属于 Library；Memory 属于具体 Agent。
+
+Model / Provider Registry 也不放普通 Library；它属于 System/Admin。
+
+## 06 SYSTEM
+
+包含：
+
+```text
+Settings
+Runtime / Harness Status
+Provider / Model Registry（Admin）
+Credentials
+Storage / Backup
+Diagnostics
+Updates
+Advanced Developer Settings
+```
+
+这样一级导航不会随功能增长无限膨胀。
+
+---
+
+# 629. Personal Primary Agent 是默认 Home，MY WORK 是它的个人工作索引
+
+启动 Workbench 后默认进入：
+
+```text
+AGENT / My Agent
+```
+
+而不是另做：
+
+```text
+Dashboard
+Home
+Overview
+```
+
+AGENT Surface 的第二栏固定使用 `MY WORK`，承担轻量个人工作索引：
+
+```text
+MY WORK
+
+NEEDS YOU
+RUNNING
+CONTINUE WORK
+CONVERSATIONS
+ROOMS
+RECENT
+```
+
+这里显示的是增量 Projection，不是另一个 Dashboard。主舞台仍然是：
+
+```text
+Conversation
++
+Composer
+```
+
+用户可以直接说：
+
+```text
+Runtime 项目现在怎么样？
+
+@Runtime研发群 继续做 Windows 适配。
+
+帮我创建一个新的项目群。
+
+昨天 Coding Agent 改了哪些文件？
+```
+
+所以：
+
+> **My Agent 本身就是 Home + Personal Command Surface。**
+
+Project Control Center 负责项目整体态势；不再重复做第二个全局 Home Dashboard。
+
+---
+
+# 630. AGENT Surface：Conversation-first，但第二栏正式命名为 MY WORK
+
+AGENT 页面不再把第二栏当成泛化 `Context Rail`。它是一个稳定的 Personal Work Index：
+
+```text
+01 AGENT
+────────────────
+
+MY WORK
+
+Needs You
+  Codex Approval                1
+  Merge Conflict               1
+
+Running
+  Runtime v2                   ●
+
+Continue Work
+  Agent Page PRD
+  Workspace Explorer
+
+Conversations
+  Runtime discussion
+  UI design
+
+Rooms
+  Runtime研发群
+  Product Design
+
+Recent
+  Decision D-412
+  ChangeSet C-82
+```
+
+`MY WORK` 是 Personal Primary Agent 的工作侧栏，不是项目管理 Dashboard。它只投影当前用户最需要回到的工作对象，并与 Agent Home / Attention / Mission / Room / Workspace 共享同一真源。
+
+Primary Stage：
+
+```text
+Agent Header
+Runtime: Auto
+Model: Auto
+Status: Ready
+
+Conversation / Work Capsule
+
+Composer
+[+] [/] [@] [Context] [Auto · Balanced] [Send]
+```
+
+右侧 Inspector 默认只显示轻量实时状态：
+
+```text
+LIVE
+
+Agent
+READY
+
+Runtime
+Auto → Codex
+
+Current Work
+Runtime v2
+
+Cost
+...
+```
+
+需要 Memory / Skill / Plugin / Glass Box 时，从 Agent Header 或 Inspector 进入对象 Studio。
+
+Memory Studio 不常驻在主聊天旁边。
+
+---
+
+# 631. PROJECT Surface：Control Center 是 Project 默认页
+
+进入 Project 后默认不是文件树，也不是 Room，而是：
+
+```text
+PROJECT / Team Workbench
+```
+
+Context Rail：
+
+```text
+Overview
+Work
+Rooms
+Knowledge
+Artifacts
+Decisions
+```
+
+Primary Stage 默认 `Overview`，显示前面已经定义的 Project Control Center：
+
+```text
+Health
+Needs You
+Running Now
+Current Work
+Workspace Impact
+Recent Decisions
+Next
+Cost
+```
+
+这里不出现大量 BI Chart。
+
+用户点击：
+
+```text
+Runtime v2
+```
+
+进入 Work / Mission Focus；
+
+点击：
+
+```text
+12 AI Changed Files
+```
+
+直接 Deep Link 到 Workspace：
+
+```text
+Workspace
+filter=AI_CHANGED
+mission=Runtime-v2
+```
+
+点击 Decision 则进入 Knowledge/Decision Detail。
+
+因此 Project Control Center 是**导航枢纽**，不是数据终点。
+
+---
+
+# 632. Mission 不成为一级导航，而是 Focus Mode
+
+Mission 是实际工作执行单元，但不需要出现在 Global Rail。
+
+进入 Mission 后：
+
+```text
+PROJECT
+Team Workbench
+  > Runtime v2
+```
+
+Primary Stage 进入：
+
+```text
+MISSION FOCUS
+```
+
+顶部模式切换：
+
+```text
+FLOW | TEAM | TIMELINE
+```
+
+默认根据 Mission 状态选择：
+
+```text
+普通顺序任务
+→ TEAM / TIMELINE
+
+出现真实拓扑、并行、handoff、review、merge
+→ FLOW
+```
+
+Mission 页面可显示：
+
+```text
+Mission Charter
+Milestone
+Critical Path
+Task Graph
+Agent Assignment
+Backend / Runtime
+Review / Repair
+Workspace Change
+Cost / Budget
+```
+
+但 Room Chat 仍然是独立 Surface；Mission 不把 Room 历史复制进来。
+
+---
+
+# 633. ROOM Surface：Chat 默认，Mission Canvas 按需出现
+
+Room 默认仍然是协作聊天：
+
+```text
+ROOM / Runtime研发群
+
+Participants
+My Agent          Coordinator
+Architect         Ready
+Coding            Running
+Reviewer          Waiting
+```
+
+Primary Stage 默认：
+
+```text
+Room Conversation
+```
+
+如果当前 Room 有 Mission：
+
+```text
+Active Mission
+Runtime v2
+[Open Mission]
+```
+
+当用户说：
+
+```text
+@Architect 带大家把这个项目做完
+```
+
+Room 可以短暂展开 Mission Preview：
+
+```text
+Team Proposal
+Task Graph Preview
+Budget
+```
+
+但正式执行以后仍然进入 Mission Focus。
+
+因此：
+
+> **Room = 沟通与协作入口。**
+>
+> **Mission = 结构化执行现场。**
+
+不要把二者做成同一个无限复杂页面。
+
+---
+
+# 634. WORKSPACE Surface：Windows Explorer 交互模型 + Workbench 视觉语言
+
+Workspace 页面保留 v0.25 定义的 Windows Explorer-grade 交互：
+
+```text
+Tabs
+Back / Forward / Up
+Breadcrumb
+Search
+Navigation Tree
+Details / List / Grid / Gallery
+Sort / Group / Filter
+Context Menu
+Drag & Drop
+Copy / Cut / Paste
+Rename
+Trash
+Properties
+Preview / Details
+Operation Center
+```
+
+但外观不是复刻 Windows Explorer。
+
+它使用 v0.41.1 的 Workbench 视觉语言：
+
+```text
+强模块标题
+编号 / 技术标签
+状态信号
+更明确的 AI / Human Actor 标记
+局部信息条
+可展开 Diff / Review / Run provenance
+```
+
+文件行可以显示：
+
+```text
+router.rs
+M  AI · Coding Agent · R-821
+Review  HIGH 1
+```
+
+右侧 Inspector 可以显示：
+
+```text
+RESOURCE / 0142
+
+Current Revision
+AI ChangeSet
+Agent / Run
+Review Finding
+Safety Point
+Rollback Coverage
+```
+
+所以 Workspace 是熟悉的文件管理交互，但拥有 Workbench 自己的 AI-native 视觉表达。
+
+---
+
+# 635. LIBRARY Surface：Agent / Skill / Plugin 统一进入“能力资产库”
+
+Library Context Rail：
+
+```text
+Agents
+Skills
+Plugins
+Definitions
+```
+
+## Agents
+
+显示当前用户可用的 Agent Instance：
+
+```text
+My Agent
+Architect
+Coding Agent
+Reviewer
+```
+
+点击 Agent：
+
+```text
+Overview
+Memory
+Skills
+Plugins
+Activity
+Usage
+Versions
+Settings
+```
+
+其中 Memory Studio 从这里或 Agent 页面进入。
+
+## Skills
+
+显示：
+
+```text
+Installed
+Recommended
+Recent
+By Agent
+```
+
+Skill Detail 包含：
+
+```text
+Overview
+Visual Explain
+Inputs
+Tools
+Permissions
+Compatibility
+Usage
+Provider Plugin
+Version
+```
+
+Archscribe 高级渲染器从 Visual Explain 中调用，不另做一级页面。
+
+## Plugins
+
+显示生命周期、Effect Ledger、Capabilities 与 Usage。
+
+这样 Library 解决“资产管理”；执行过程仍然回到 Agent/Room/Mission。
+
+---
+
+# 636. Memory Studio / Skill Studio / Glass Box 全部属于 Secondary Surface
+
+这些页面非常重要，但不应该占一级导航。
+
+分类：
+
+```text
+Primary Surface
+Agent / Project / Room / Workspace / Library / System
+
+Secondary Studio
+Memory Studio
+Skill Studio
+Plugin Detail
+Knowledge Detail
+Decision Detail
+Artifact Detail
+
+Execution Detail
+Task Detail
+Run Detail
+Review
+Glass BoxRecovery Trace
+```
+
+用户从真实对象进入它们。
+
+例如：
+
+```text
+Agent
+→ Memory
+→ Memory Studio
+```
+
+而不是：
+
+```text
+Global Rail
+→ Memory
+→ 再选择 Agent
+```
+
+这能够保持“对象先于工具”的信息架构。
+
+---
+
+# 637. Attention 不成为一级页面，而是 Global Drawer + Project Projection
+
+Attention 是全局一等对象，但 UI 不需要给它永久占一个一级 Rail Item。
+
+Global Shell 顶部/底部保留：
+
+```text
+NEEDS YOU  3
+```
+
+点击打开：
+
+```text
+ATTENTION DRAWER
+```
+
+分组：
+
+```text
+Blocking
+Approval
+Review
+Conflict
+Budget
+Runtime
+```
+
+每个 Item 点击 Deep Link 到真实对象：
+
+```text
+Approval
+→ Run / Native Approval
+
+Merge Conflict
+→ Workspace / Diff
+
+Budget
+→ Mission / Cost
+```
+
+Project Control Center 同时显示该 Project 的 Needs You Projection。
+
+因此 Attention 有两个入口：
+
+```text
+Global Drawer
+Project Needs You
+```
+
+但只有一份 Durable Attention Truth。
+
+---
+
+# 638. Inspector / Live Signal 是统一的 Context Projection，不是每页各造一个右栏
+
+右侧 Inspector 统一使用一套结构：
+
+```text
+IDENTITY
+STATUS
+CURRENT WORK
+RUNTIME
+CONTEXT
+COST
+ATTENTION
+EVIDENCE
+```
+
+只是不同对象显示不同部分。
+
+Agent：
+
+```text
+Runtime
+Model
+Current Work
+Memory Recall
+Skills
+Cost
+```
+
+Mission：
+
+```text
+Lead
+Critical Path
+Running Tasks
+Provider Pressure
+Budget
+```
+
+Workspace Resource：
+
+```text
+Revision
+Actor
+Run
+Review
+Safety Point
+```
+
+Inspector 状态：
+
+```text
+AUTO
+PINNED
+HIDDEN
+```
+
+AUTO 模式下：
+
+```text
+用户选择对象
+→ Inspector 自动切换
+```
+
+PINNED：
+
+```text
+保持某对象观察
+即使用户在 Stage 浏览其他内容
+```
+
+这对观察一个 Running Agent 非常有价值。
+
+---
+
+# 639. Visual Style System：借参考图的“构图方法”，不是借颜色
+
+正式 UI 实现继续遵循 v0.41.1：
+
+```text
+Style System
+≠
+Theme System
+```
+
+Style 负责：
+
+```text
+Panel 比例
+空间层级
+标题系统
+编号
+技术标签
+状态信号
+边缘标签
+局部切角 / 叠层
+信息密度
+动效节奏
+```
+
+Theme 负责：
+
+```text
+Background
+Foreground
+Accent
+Status colors
+Border
+Elevation
+Light / Dark
+```
+
+所以可以有：
+
+```text
+Dark Theme
+Light Theme
+High Contrast
+Custom Accent
+```
+
+仍然保持相同 Workbench 气质。
+
+明确避免：
+
+```text
+所有东西都做成相同圆角卡片
+大面积无意义渐变
+为了“科技感”堆发光线条
+纯装饰 HUD
+持续闪烁动画
+```
+
+要保留的是：
+
+> **像真正的 AI 执行控制台，而不是 SaaS 卡片后台。**
+
+---
+
+# 640. Typography / Geometry 需要承担信息层级，而不是只靠颜色
+
+因为 Theme 可切换，所以状态不能只靠：
+
+```text
+绿色 = 成功
+红色 = 失败
+```
+
+还必须结合：
+
+```text
+Icon
+Label
+Shape
+Border pattern
+Position
+Motion
+```
+
+例如：
+
+```text
+RUNNING
+● + RUNNING label
+
+WAITING
+◐ + WAITING label
+
+BLOCKED
+! + BLOCKED label
+
+FAILED
+× + FAILED label
+```
+
+编号体系可用于建立视觉秩序：
+
+```text
+01 AGENT
+02 PROJECTS
+03 ROOMS
+04 WORKSPACE
+05 LIBRARY
+06 SYSTEM
+```
+
+对象局部编号则用于技术识别：
+
+```text
+RUN / 821
+TASK / 14
+RESOURCE / 0142
+DECISION / 412
+```
+
+不是装饰，而是帮助用户快速区分“页面模块”和“真实对象”。
+
+---
+
+# 641. 页面层级最多保持三层可见深度
+
+避免：
+
+```text
+Project
+→ Work
+→ Mission
+→ Task
+→ Run
+→ Tool
+→ File
+→ Diff
+```
+
+用户迷失。
+
+任何时刻导航层级尽量表达为：
+
+```text
+Primary Surface
+→ Current Object
+→ Detail / Inspector
+```
+
+例如：
+
+```text
+PROJECTS
+→ Runtime v2 Mission
+→ Task Detail
+```
+
+Task 内点击文件：
+
+```text
+打开 Workspace
+同时保留 Back Stack
+```
+
+而不是在 Task Detail 里再嵌一个完整 Explorer。
+
+因此跨 Surface 跳转非常重要。
+
+---
+
+# 642. Workbench Deep Link / Surface Route 成为正式 UI Contract
+
+为了主 Agent、Attention、Notification、Project Control、Workspace Review 能相互跳转，需要稳定 Route：
+
+```text
+workbench://agent/{agentId}
+workbench://conversation/{conversationId}
+workbench://project/{projectId}
+workbench://room/{roomId}
+workbench://mission/{missionId}
+workbench://task/{taskId}
+workbench://workspace/{workspaceId}/resource/{resourceId}
+workbench://decision/{decisionId}
+workbench://artifact/{artifactId}
+workbench://skill/{skillId}
+workbench://attention/{attentionId}
+workbench://run/{runId}
+```
+
+这套 Route 不是给网页公开访问，而是产品内部稳定对象导航协议。
+
+以后：
+
+```text
+My Agent 回复
+Attention Drawer
+Desktop Notification
+Timeline
+Canvas Node
+Search Result
+```
+
+都使用同一个 TargetRef / SurfaceRoute。
+
+---
+
+# 643. Back / Forward / Recent History 应该像真正工作站一样可靠
+
+因为用户会频繁跨：
+
+```text
+Agent
+→ Project
+→ Mission
+→ Workspace Diff
+→ Decision
+```
+
+所以 Desktop Shell 必须维护：
+
+```text
+Back
+Forward
+Recent Surfaces
+```
+
+并记住：
+
+```text
+selected object
+scroll position
+filter
+workspace path
+inspector mode
+```
+
+例如用户：
+
+```text
+Mission
+→ router.rs Diff
+→ Back
+```
+
+应该返回同一个 Mission 的同一个 Task，而不是 Project 首页。
+
+这会显著减少多 Surface 工作时的迷失感。
+
+---
+
+# 644. Scope Selector 是统一机制，不在每一页重新发明
+
+很多页面存在作用域：
+
+```text
+Current Agent
+Current Project
+Current Room
+Current Work
+All
+```
+
+统一使用：
+
+```text
+ScopeSelector
+```
+
+例如 Workspace：
+
+```text
+Project: Team Workbench
+Workspace: Repo A
+```
+
+Knowledge：
+
+```text
+Project: Team Workbench
+```
+
+Usage：
+
+```text
+Agent: Coding Agent
+Time: 7 days
+```
+
+Scope 不应该藏在自然语言里，也不应该各页面使用不同交互模式。
+
+---
+
+# 645. 普通用户 / Advanced / Developer 三层透明度
+
+同一套数据根据用户需求分层展示。
+
+## Level 1 — Normal
+
+```text
+正在做什么
+谁在做
+是否需要我
+改了什么
+结果如何
+花了多少
+```
+
+## Level 2 — Advanced
+
+```text
+Runtime
+Model
+Skill
+Task Graph
+Context Sources
+Review
+Recovery
+```
+
+## Level 3 — Developer / Glass Box
+
+```text
+RuntimeBinding
+Native events
+MaterializationReceipt
+MemoryTurnReceipt
+SearchReceipt
+CommandReceipt
+Provider pressure
+Process / IPC
+```
+
+这样普通用户不会被实现细节淹没，但高级用户仍能完整 Debug。
+
+---
+
+# 646. Canvas 继续坚持“真实拓扑出现才显示”
+
+不能因为参考图有“控制台感”，就把每个页面都做成流程图。
+
+Canvas 只在真实存在：
+
+```text
+parallel
+handoff
+review
+repair
+condition
+wait_for
+merge
+multi-agent topology
+```
+
+时出现。
+
+单 Agent 简单工作仍然：
+
+```text
+Conversation
++ Timeline
+```
+
+这保持了之前：
+
+> **Process truth first, visualization second。**
+
+---
+
+# 647. UI 动效只表达状态变化，不做持续装饰动画
+
+适合动效：
+
+```text
+Task queued → running
+Handoff
+New Attention
+Panel transition
+Canvas edge activation
+Run recovered
+Diff applied
+```
+
+不适合：
+
+```text
+永远闪烁的边框
+无意义扫描线
+背景粒子
+持续旋转 HUD
+```
+
+用户可能连续使用 Workbench 8 小时。
+
+视觉必须具有“专业控制室”的专注感，而不是 30 秒展示 Demo 的刺激感。
+
+---
+
+# 648. Linux 窗口尺寸与布局退化策略
+
+优先目标仍然是桌面工作站，而不是响应式网页。
+
+推荐布局状态：
+
+```text
+Wide
+Global + Context + Stage + Inspector
+
+Standard
+Global + Context + Stage
+Inspector overlay / auto
+
+Compact Desktop
+Global collapsed + Stage
+Context / Inspector drawer
+```
+
+不为 Linux MVP 强行适配手机宽度。
+
+最小窗口下宁可：
+
+```text
+折叠 Context Rail
+折叠 Inspector
+```
+
+也不要把所有 Pane 压成无法阅读的细条。
+
+---
+
+# 649. UI 投影必须是 Cached-first，不允许切页触发 LLM
+
+所有一级 Surface 打开：
+
+```text
+Agent Home
+Project Control
+Room
+Mission
+Workspace
+Library
+```
+
+默认只读取：
+
+```text
+SQLite projection
+Event projection
+Workspace metadata
+```
+
+不允许：
+
+```text
+点击 Project
+→ 调模型总结
+
+打开 Room
+→ 调模型 catch-up
+
+切 Agent
+→ 调模型生成首页
+```
+
+只有真正用户触发 Agent Turn / Deep Explain / Analysis 才调用模型。
+
+因此 UI 导航本身：
+
+```text
+Model Token Cost = 0
+```
+
+---
+
+# 650. UI 性能基线
+
+Draft 工程目标：
+
+```text
+App shell 首次可交互
+尽量 < 1s（warm local profile）
+
+Surface 切换 cached-first
+目标 < 100ms 感知级响应
+
+Context Rail 1k items
+必须虚拟化 / 增量加载
+
+Conversation / Timeline
+虚拟化
+
+Canvas
+只更新变化节点/边
+
+Inspector
+只订阅当前/固定对象
+
+Workspace
+沿用 v0.25 first-frame / visible hydration 预算
+```
+
+不要求所有 Surface 一次把全部数据加载完成。
+
+原则：
+
+> **Shell first, current stage next, secondary detail later。**
+
+---
+
+# 651. Accessibility 不能因为视觉风格被牺牲
+
+即使采用强烈的编辑式控制台风格，也必须保留：
+
+```text
+键盘导航
+Focus Ring
+文本缩放
+高对比度主题
+状态不只依赖颜色
+Reduced Motion
+屏幕阅读器可读 Label
+可调整字体尺寸
+```
+
+特别是：
+
+```text
+切角
+竖排标签
+编号
+装饰性边缘文字
+```
+
+不能成为唯一的信息载体。
+
+视觉设计可以有个性，但产品可用性必须优先。
+
+---
+
+# 652. v0.45 Decision Log — Linux UI Information Architecture
+
+## D-586 — Linux Desktop Uses a Four-zone App Shell
+
+**决定：** 统一壳层采用 `Global Rail + Second Rail + Primary Stage + Optional Inspector/Live Signal`；其中 AGENT 下 Second Rail = `MY WORK`，其他一级域下 Second Rail = 各自 Context Rail。四区是可折叠布局模型，不是所有页面固定四列。  
+**状态：** Accepted · Clarified by v0.45.1
+
+## D-587 — Top-level Product Surfaces Are Frozen to Six Domains
+
+**决定：** Linux MVP 一级导航固定为 `Agent / Projects / Rooms / Workspace / Library / System`；Mission、Memory、Skill Studio、Knowledge、Attention、Glass Box 等不继续膨胀为一级导航。  
+**状态：** Accepted
+
+## D-588 — Personal Primary Agent Is the Default Home Surface
+
+**决定：** Workbench 启动默认进入 Personal Primary Agent；不额外建立传统 Dashboard Home。My Agent 同时承担 Home 与 Personal Command Surface，并通过 `MY WORK` Rail 提供 Needs You / Running / Continue Work / Conversations / Rooms / Recent 的个人工作索引。  
+**状态：** Accepted · Strengthened by v0.45.1
+
+## D-589 — Project Control Center Is the Default Project Surface
+
+**决定：** 进入 Project 默认显示 Control Center；Workspace、Room、Mission、Knowledge 通过 Project Context Rail / Deep Link 进入，不把 Project 默认页做成文件树或聊天页。  
+**状态：** Accepted
+
+## D-590 — Mission Is a Focus Mode, Not a Global Navigation Domain
+
+**决定：** Mission 从 Project/Room/Agent Work 进入 Focus Mode，以 Flow/Team/Timeline 投影同一 Task/Event 真源；不单列全局 Mission 一级入口。  
+**状态：** Accepted
+
+## D-591 — Room Defaults to Conversation; Structured Mission Execution Is Opened Explicitly
+
+**决定：** Room 保持沟通/协作表面，Mission 是结构化执行表面；两者共享引用与状态，但不把完整 Mission Canvas 永久塞进 Room Chat。  
+**状态：** Accepted
+
+## D-592 — Workspace Reuses Familiar Explorer Interaction but Keeps Workbench-native Visual Language
+
+**决定：** Workspace 交互遵循 Windows Explorer 熟悉模型，但视觉采用 Workbench Style System，并增加 AI Actor / Run / Review / Safety Point 等原生信息，不像素级复刻 Windows。  
+**状态：** Accepted
+
+## D-593 — Library Owns Agent/Skill/Plugin Assets; Memory Stays Agent-scoped
+
+**决定：** Library 管 Agent、Skill、Plugin、Definition 等能力资产；Memory Studio 只能从具体 Agent 进入，Model/Provider Registry 属于 System/Admin。  
+**状态：** Accepted
+
+## D-594 — Studios and Glass Box Are Secondary Surfaces
+
+**决定：** Memory Studio、Skill Studio、Plugin Detail、Knowledge/Decision/Artifact Detail、Task/Run/Review/Glass Box 等属于 Secondary/Execution Detail，不占一级导航。  
+**状态：** Accepted
+
+## D-595 — Attention Uses a Global Drawer and Contextual Projection, Not a Permanent Top-level Page
+
+**决定：** Attention 保持 Durable Truth，但 UI 入口为 Global Drawer + Project Needs You；点击后 Deep Link 到实际 Approval/Conflict/Budget/Run 对象。  
+**状态：** Accepted
+
+## D-596 — Inspector / Live Signal Is a Shared Context Projection
+
+**决定：** 右侧 Inspector 使用统一数据结构并支持 AUTO/PINNED/HIDDEN；不同 Surface 只改变投影内容，不各自开发互不兼容的右栏。  
+**状态：** Accepted
+
+## D-597 — Style Language and Theme Palette Remain Separate
+
+**决定：** Linux UI 借鉴参考图的构图、层级、编号、技术标记与执行现场感；Theme 独立控制明暗/颜色/Accent，禁止把参考图的配色硬编码为产品身份。  
+**状态：** Accepted
+
+## D-598 — UI Hierarchy Should Rarely Expose More Than Three Visible Navigation Levels
+
+**决定：** 通过跨 Surface Deep Link、Back Stack 与 Inspector 避免 Project→Mission→Task→Run→Tool→File 无限嵌套；同一时刻尽量保持 Primary Surface → Current Object → Detail。  
+**状态：** Accepted
+
+## D-599 — Stable SurfaceRoute / TargetRef Is an Internal Navigation Contract
+
+**决定：** Agent 回复、Attention、Notification、Canvas、Timeline、Search Result、Project Control 等统一使用稳定对象 Route/TargetRef 跳转，不各自拼 UI-specific URL。  
+**状态：** Accepted
+
+## D-600 — Scope Selection Uses One Shared Pattern Across Surfaces
+
+**决定：** Agent/Project/Room/Workspace/Usage 等范围选择使用统一 ScopeSelector 语义，避免不同页面用不同方式表达“当前范围”。  
+**状态：** Accepted
+
+## D-601 — Transparency Is Tiered: Normal / Advanced / Developer
+
+**决定：** 普通用户看任务、结果、成本与需要处理事项；Advanced 看 Runtime/Skill/Context/Task Graph；Developer/Glass Box 才看 Binding/Event/Receipt/Process 等底层细节。  
+**状态：** Accepted
+
+## D-602 — Canvas Appears Only When Real Execution Topology Exists
+
+**决定：** 只有多 Agent、并行、handoff、review、repair、condition、merge 等真实拓扑才自动出现 Canvas；简单单 Agent Turn 保持 Conversation/Timeline。  
+**状态：** Accepted
+
+## D-603 — UI Animation Must Communicate State, Not Become Persistent Decoration
+
+**决定：** 动效用于 Queue→Running、Handoff、Attention、Recovery 等真实变化；禁止持续 HUD/扫描/闪烁装饰影响长时间工作。  
+**状态：** Accepted
+
+## D-604 — Linux UI Navigation and Projection Loading Must Be Zero-token by Default
+
+**决定：** 打开/切换 Agent、Project、Room、Mission、Workspace、Library 不自动调用 LLM；全部 cached-first / projection-first，只有显式 Agent Turn / Explain / Analysis 才产生模型 Token。  
+**状态：** Accepted
+
+## D-605 — Accessibility Constraints Apply to the Visual North Star
+
+**决定：** 强视觉风格不得牺牲键盘操作、Focus、文本缩放、高对比度、Reduced Motion 与非颜色状态表达；装饰性编号/切角/竖排文字不得作为唯一语义载体。  
+**状态：** Accepted
+
+## D-606 — Route 3 Hybrid Agent-centered Shell Is the Final IA Direction
+
+**决定：** Linux Desktop 采用 Agent-centered Hybrid Shell：六个一级 Product Surface 保持专业扩展能力，但 `01 AGENT / My Agent` 具有默认 Home 与自然语言入口的特殊地位；产品不得演化成六个完全等权、彼此割裂的工具模块集合。  
+**状态：** Accepted
+
+## D-607 — MY WORK Is a Stable Personal Work Index, Not a Generic Context Rail
+
+**决定：** AGENT Surface 的第二栏固定命名并实现为 `MY WORK`，投影 Needs You / Running / Continue Work / Conversations / Rooms / Recent；切换到其他一级域时第二栏才转化为对应 Context Rail。MY WORK 必须 cached-first / projection-first，切换与加载默认 0 Token。  
+**状态：** Accepted
+
+## D-608 — Professional Surfaces Remain First-class Without Displacing the Agent Center
+
+**决定：** Project Control、Room、Workspace、Library、System 仍是可直接进入的一等 Surface；它们不是 My Agent 内部的隐藏子菜单。但默认工作流应允许用户从 My Agent / MY WORK 进入这些 Surface，并通过 Back/Deep Link 无损返回，从而同时保持 Agent 原生感与专业工作台能力。  
+**状态：** Accepted
+
+
+---
+
+# 653. v0.46 — Diagnostics / Privacy / Support Bundle / Crash Report
+
+这一阶段的目标不是“记录更多日志”，而是建立一条在长期 AUTO TEAM、后台 daemon、多 Harness、多插件环境中仍然可控的故障诊断链。Workbench 必须同时满足两个看似冲突的要求：一方面，遇到 DeepSeek/Codex 协议变化、Crash Loop、Runtime 进程异常、Migration 失败、Provider 错误分类异常时，要有足够证据定位；另一方面，诊断系统不能成为新的数据外泄通道，不能因为“为了排查问题”就把 Private Memory、完整 Prompt、项目代码、API Key 或 Raw Tool Output 全部打包。
+
+核心原则：
+
+```text
+Diagnostics ≠ Raw Data Dump
+
+Diagnostics
+=
+Structured Facts
++ Bounded Evidence
++ Explicit Privacy Class
++ Redaction
++ User-controlled Export
+```
+
+默认诊断路径必须满足：
+
+```text
+Local First
+Zero Token
+Zero Automatic Upload
+Bounded Disk
+Redacted by Default
+```
+
+## 653.1 Crash Domain：先回答“到底是谁坏了”
+
+统一 Incident 不代表把所有故障混成一种错误。至少区分：
+
+```text
+UI_PROCESS
+WORKBENCHD
+RUNTIME_DEEPSEEK
+RUNTIME_CODEX
+RUNTIME_CHILD_WORKER
+PLUGIN
+PARSER_OR_SIDECAR
+DATABASE
+WORKSPACE_PROVIDER
+NETWORK_OR_PROVIDER
+UPDATE_OR_MIGRATION
+UNKNOWN
+```
+
+例如 Tauri 前端崩溃时：
+
+```text
+UI_PROCESS crashed
+workbenchd alive
+Mission continues
+```
+
+不能在 Project Control Center 中误显示：
+
+```text
+Mission FAILED
+```
+
+而 Codex Runtime Crash Loop 也不能被表现成整个 Workbench 崩溃。Incident Domain 必须和 Task/Mission 状态机分离。
+
+## 653.2 IncidentRecord 是诊断真源，不以日志文本作为唯一依据
+
+每个显著故障创建结构化 `IncidentRecord`：
+
+```text
+IncidentRecord
+
+incidentId
+correlationId
+occurredAt
+crashDomain
+severity
+projectRef?
+missionRef?
+taskRef?
+runRef?
+runtimeInstallationId?
+runtimeBindingId?
+processLeaseId?
+normalizedFailure?
+firstSeenAt
+lastSeenAt
+occurrenceCount
+state
+```
+
+状态：
+
+```text
+OPEN
+MITIGATED
+RESOLVED
+QUARANTINED
+NEEDS_USER
+ARCHIVED
+```
+
+日志、Crash Envelope、Runtime event、Contract Test 结果只是 Incident 的证据引用，而不是产品状态真源。
+
+## 653.3 CorrelationId 跨 UI → daemon → Adapter → Harness → Provider
+
+当一次 Agent Run 出问题时，用户不应该拿到五套互不关联的日志时间戳。Workbench 对一次工作链建立稳定 `CorrelationId`：
+
+```text
+User Command
+   ↓
+Workbench Command
+   ↓
+Task / Run
+   ↓
+Runtime Adapter
+   ↓
+Harness Process
+   ↓
+Provider Request
+```
+
+只要层级允许，结构化事件都带同一个 CorrelationId 或其父子 SpanRef。这样 Diagnostics 可以回答：
+
+> “这次 Coding Agent 的失败，和哪一次 Codex 进程重启、哪一个 429、哪一个 Runtime 版本有关？”
+
+不需要扫描全盘日志猜时间。
+
+## 653.4 DiagnosticSnapshot 记录“环境事实”，不复制用户内容
+
+发生高价值 Incident 时生成小型 `DiagnosticSnapshot`，典型内容：
+
+```text
+Workbench version
+workbenchd version
+OS / arch
+Runtime installation version
+Adapter version
+Protocol fingerprint
+Capability fingerprint
+Last-Good version
+Contract Test result
+Runtime health
+Process exit code / signal
+CPU/RAM pressure class
+Provider pressure state
+Token pressure state
+Active feature flags
+DB schema version
+Migration state
+Plugin manifest versions
+```
+
+默认不包含：
+
+```text
+完整 Prompt
+Private Memory 正文
+Workspace 文件正文
+完整 Tool Output
+API Key / Token
+环境变量值
+用户真实文件全文
+```
+
+这使 DeepSeek/Codex 更新后“同一个功能为什么突然失败”能够快速定位到版本/协议/能力变化，而不是必须收集项目内容。
+
+## 653.5 Privacy Classification 先于日志/导出
+
+诊断数据至少分为：
+
+```text
+P0_PUBLIC_TECHNICAL
+版本、错误码、状态枚举、匿名能力指纹
+
+P1_PRIVATE_METADATA
+Agent/Project 对象 ID、相对路径、任务标题等元数据
+
+P2_USER_CONTENT
+Prompt、Memory、代码、文档、Tool Output 正文
+
+P3_SECRET
+API Key、Token、Password、Credential、Private Key
+```
+
+默认 Support Bundle：
+
+```text
+P0 允许
+P1 最小化 + 脱敏
+P2 禁止
+P3 永远禁止```
+
+P2 若确实为复现所必需，必须由用户在导出前显式选择具体范围；P3 即使用户勾选“详细诊断”也不进入普通 Support Bundle。
+
+## 653.6 Redaction Pipeline 与 Data Egress Secret Scanner 共用规则基础
+
+诊断系统不能重新维护另一套 Secret 识别逻辑。优先复用 v0.42 的：
+
+```text
+Known Secret Patterns
+CredentialRef Registry
+Sensitive Filename Rules
+Entropy / Token Heuristics
+Project Custom Rules
+```
+
+生成诊断包前必须：
+
+```text
+Collect Candidate
+      ↓
+Classify
+      ↓
+Secret Scan
+      ↓
+Redact / Drop
+      ↓
+Manifest
+      ↓
+User Preview
+      ↓
+Export
+```
+
+即使某条日志在写入时已经 Redacted，Support Bundle 阶段仍做第二次出口扫描，形成双层防护。
+
+## 653.7 Structured Log 是运行诊断，不是 Event Store 的替代品
+
+日志用于定位实现问题；Event Store / Receipt 用于表达产品事实。二者不能互相代替。
+
+日志建议为结构化 JSON Lines 或等价结构：
+
+```text
+time
+level
+component
+correlationId
+incidentId?
+eventCode
+messageTemplate
+safeFields
+```
+
+禁止默认把整个请求对象 `Debug` dump 到日志中。尤其禁止：
+
+```text
+println!("request = {:?}", request_with_prompt_and_key)
+```
+
+日志 level：
+
+```text
+ERROR
+WARN
+INFO
+DEBUG
+TRACE
+```
+
+MVP 默认 INFO；DEBUG/TRACE 必须临时开启并有 TTL。
+
+## 653.8 Bounded Breadcrumb：保留崩溃前上下文，但必须有界
+
+为了定位“崩溃前发生了什么”，每个关键进程保留有界 ring buffer：
+
+```text
+最近 N 个结构化 Runtime 事件
+最近 N 个状态迁移
+最近 N 个 Provider Failure 分类
+最近 N 个 IPC 方法名/结果状态
+```
+
+不是：
+
+```text
+最近 N 个完整 Prompt
+最近 N 个完整 stdout
+```
+
+Breadcrumb 在 crash 时封装进 CrashEnvelope，避免为了复现一个瞬时错误无限开启 TRACE。
+
+## 653.9 CrashEnvelope 只记录可安全捕获的崩溃信息
+
+```text
+CrashEnvelope
+
+component
+processId
+installationId
+exitCode / signal
+thread/task label where available
+safe stack trace
+correlationId
+bounded breadcrumbs
+resource pressure snapshot
+last semantic event refs
+```
+
+原生 core dump / minidump 可能包含内存中的 Secret、Prompt、代码、Token，因此 Linux MVP：
+
+```text
+默认不自动打包 core dump
+默认不自动上传 core dump
+```
+
+如果 Developer Mode 未来允许采集，只能：
+
+```text
+Local Only
+Explicit Opt-in
+Short TTL
+Visible Warning
+Never Included Automatically in Support Bundle
+```
+
+## 653.10 Support Bundle 采用 Profile，而不是“打包全部日志”
+
+MVP 提供三个层级：
+
+```text
+MINIMAL
+默认
+版本、CrashEnvelope、Incident、健康状态、错误码、Schema/Protocol 指纹
+
+RUNTIME_DIAGNOSTIC
+用户显式选择
+增加 Runtime Contract Test、进程生命周期、Adapter 安全日志、Provider Failure Summary
+
+SCOPED_CONTENT
+高级/开发者
+用户明确选择某个 Run/Task/Resource 的有限内容
+```
+
+`SCOPED_CONTENT` 不是“导出整个 Project”。用户必须看到具体将包含的对象。
+
+## 653.11 SupportBundleManifest 是导出前后都可审计的清单
+
+每个 Bundle 写入：
+
+```text
+bundleId
+createdAt
+profile
+workbenchVersion
+includedItems[]
+excludedByPolicy[]
+redactionCount
+contentClassSummary
+fileHashes
+size
+```
+
+UI 在真正导出前给出预览：
+
+```text
+SUPPORT BUNDLE
+
+Included
+✓ Workbench version
+✓ Codex version + protocol fingerprint
+✓ Incident I-821
+✓ 47 structured diagnostic events
+✓ 2 redacted path values
+
+Excluded
+— API credentials
+— Private Memory content
+— Workspace source files
+— Raw Tool Output
+— Full prompts
+
+[Export]
+```
+
+用户可以取消或降低范围。
+
+## 653.12 路径和对象名称默认最小化
+
+真实绝对路径可能泄露用户名、客户名、仓库名：
+
+```text
+/home/alice/customer-secret/project-x/router.rs
+```
+
+默认 Support Bundle 优先变为：
+
+```text
+<workspace>/router.rs
+```
+
+或者稳定匿名 ID：
+
+```text
+resource:R-82
+```
+
+只有 Scoped Content 且用户明确允许时才保留必要路径。
+
+## 653.13 Command / Tool 诊断使用“安全摘要”，而非完整命令字符串
+
+部分 shell command 本身可能包含 Secret：
+
+```text
+curl -H "Authorization: Bearer ..."
+```
+
+诊断默认保存：
+
+```text
+tool = shell
+executable = curl
+exitCode = 22
+duration = 1.4s
+sideEffectClass = NETWORK
+```
+
+完整命令只有在安全分类允许且通过 Redaction 后才能进入 Scoped Content。Harness 原生 Approval 需要展示 exact command 给当前用户时属于运行时交互，不等于可以永久进入 Support Bundle。
+
+## 653.14 Provider / Token 诊断记录容量事实，不记录用户 Payload
+
+Provider Incident 需要：
+
+```text
+normalizedFailure
+HTTP/provider code
+Retry-After
+attempt
+concurrency window
+reservation estimate
+actual token usage
+circuit state
+credentialRef opaque id
+```
+
+不需要：
+
+```text
+完整 API request body
+完整 model prompt
+Authorization header
+```
+
+因此 429/502 调优和 Token Optimization 可以完成，而不依赖收集用户内容。
+
+## 653.15 Runtime Upgrade Incident 必须带 Compatibility Evidence
+
+DeepSeek/Codex 更新后发生问题时，Incident 自动关联：
+
+```text
+Previous Last-Good Installation
+Current Installation
+Adapter Version
+Protocol Fingerprint Diff
+Capability Diff
+Contract Test Diff
+Auth Contract Diff
+Permission Projection Diff
+Error-normalization Contract Result
+```
+
+UI 可以直接显示：
+
+```text
+CODEX INCIDENT
+
+Current     0.B
+Last-Good   0.A
+
+Changed
+Approval event schema
+
+Contract
+FAILED
+
+Action
+[Keep Last-Good]
+[Open Diagnostics]
+```
+
+这让“升级后出问题”成为一等可诊断场景，而不是要求用户自行比对日志。
+
+## 653.16 Deep Trace 必须是临时能力
+
+高级用户可以针对：
+
+```text
+一个 Runtime
+一个 Run
+一个 Plugin
+一个 Parser
+```
+
+开启 Deep Trace，但必须设置：
+
+```text
+Scope
+Max Size
+TTL
+Auto Disable
+Privacy Warning
+```
+
+例如：
+
+```text
+Deep Trace
+Codex · Run R-821
+Expires in 15 min
+Max 50 MB
+```
+
+结束后自动回到 INFO。禁止永久把整个 Workbench 运行在 TRACE。
+
+## 653.17 Diagnostics 采集不能阻塞真实工作
+
+日志写入使用 bounded async queue / buffered writer；发生日志 IO 压力时：
+
+```text
+丢弃低优先级 DEBUG/TRACE
+保留 ERROR/WARN + Semantic Receipt
+```
+
+绝不能因为：
+
+```text
+诊断磁盘慢
+```
+
+让：
+
+```text
+Agent Task / Approval / Workspace transaction
+```
+
+一起卡死。
+
+## 653.18 Crash Loop 与 Diagnostics 联动
+
+同一 fingerprint 在短时间反复出现：
+
+```text
+Incident occurrenceCount ↑
+      ↓
+Crash Loop Detector
+      ↓
+Runtime/Plugin QUARANTINED
+      ↓
+Attention
+```
+
+通知用户只产生一条聚合 Attention，而不是每次 crash 都弹通知。
+
+诊断页显示：
+
+```text
+17 occurrences in 4m
+First: 14:02:11
+Last:  14:06:29
+Runtime quarantined
+Last-Good available
+```
+
+## 653.19 数据库/Migration 故障进入只读诊断路径
+
+如果 Canonical DB Integrity/Migration 失败：
+
+```text
+STOP WRITES
+      ↓
+Emergency Read-only
+      ↓
+Diagnostics available
+```
+
+Diagnostics 不应该依赖“数据库必须完全正常”才能打开。至少保留一个文件级/sidecar 的 Startup Incident Envelope，使用户能知道：
+
+```text
+Schema 44 → 45 migration failed at step M-003
+PreMigration backup exists
+Canonical DB not overwritten
+```
+
+## 653.20 Diagnostics UI 归 SYSTEM，但对象可从任何地方 Deep Link
+
+一级导航仍不新增 Diagnostics。
+
+```text
+06 SYSTEM
+    ↓
+Diagnostics
+```
+
+但从：
+
+```text
+Attention
+Runtime Inspector
+Mission
+Plugin
+Crash Banner
+Update Manager
+```
+
+都可以：
+
+```text
+Open Incident
+```
+
+中央 Surface 展示 Incident；右侧 Live Signal 展示当前关联 Runtime/Task/Recovery。
+
+## 653.21 Glass Box 与 Diagnostics 的关系
+
+```text
+Glass Box
+= 正常运行透明度
+
+Diagnostics
+= 异常调查与导出
+```
+
+Glass Box 可以查看一个 Run 的 RuntimeBinding、MemoryTurnReceipt、MaterializationReceipt 等事实；Diagnostics 关注 Crash、Compatibility、资源压力、错误链与 Support Bundle。
+
+二者可以互相 Deep Link，但不能合并成一个“什么都有”的开发者页面。
+
+## 653.22 默认不自动上传 Telemetry / Crash Report
+
+Linux MVP 建议：
+
+```text
+Local diagnostics by default
+No silent telemetry upload
+No silent crash dump upload
+```
+
+如果未来加入 opt-in telemetry，必须单独定义数据字典、Retention、Destination、关闭方式与 Enterprise Policy；不能因为有 Support Bundle 功能，就把其内容自动传到服务端。
+
+## 653.23 “AI 帮我解释故障”是可选 Agent 行为，不是诊断基础设施
+
+用户未来可点击：
+
+```text
+[Explain Incident]
+```
+
+这时当前 Agent 可以读取**已经脱敏、最小化的 DiagnosticSnapshot**进行解释，并产生 DataEgressReceipt。
+
+但：
+
+```text
+打开 Diagnostics 页面
+生成 Support Bundle
+发生 Crash
+```
+
+默认都是：
+
+```text
+0 Token
+```
+
+不允许每次 crash 都自动调用模型“总结错误”。
+
+## 653.24 Support Export 必须可重复且可验证
+
+同一个 Incident/Profile 在数据未变化时，Bundle Builder 应尽可能生成稳定 Manifest；每个文件带 hash，用户或支持人员可以确认包未被篡改/截断。
+
+Bundle 本身不是自动可信的执行输入；任何从 Support Bundle 导入/重放的功能都必须另外设计，不允许未来把日志包直接交给 Workbench 自动执行 shell。
+
+## 653.25 Retention / Disk Pressure
+
+诊断数据遵循独立预算：
+
+```text
+ERROR/WARN structured logs       较长 TTL
+INFO                              中 TTL
+DEBUG/TRACE                       短 TTL
+CrashEnvelope                     按数量/时间保留
+Support Bundle                    用户管理
+Raw core/minidump                 默认无
+```
+
+磁盘压力时优先删除：
+
+```text
+TRACE
+DEBUG
+旧 INFO
+旧未固定 Crash artifacts
+```
+
+不能为了腾空间删除 D0/D1 Canonical Product Data。
+
+## 653.26 Security Acceptance：使用 Canary Secret 做自动泄漏测试
+
+测试环境注入明确的假 Secret：
+
+```text
+WB_TEST_SECRET_7H3K...
+```
+
+然后故意触发：
+
+```text
+Runtime crash
+Provider error
+Tool failure
+Plugin panic
+Migration error
+Support Bundle export
+```
+
+Acceptance：
+
+```text
+Secret 不出现在默认日志
+Secret 不出现在 CrashEnvelope
+Secret 不出现在 MINIMAL/RUNTIME_DIAGNOSTIC Bundle
+Secret 不出现在 Attention/Notification
+Secret 不出现在 Incident UI 的普通层级
+```
+
+这是 v0.46 的硬性自动测试，而不是人工抽查。
+
+---
+
+# 654. v0.46 Linux MVP Diagnostics Surface
+
+建议最终界面：
+
+```text
+SYSTEM / DIAGNOSTICS
+
+HEALTH
+Workbenchd        READY
+Database          READY
+Codex             DEGRADED
+DeepSeek          READY
+
+RECENT INCIDENTS
+I-821   Codex crash loop          QUARANTINED
+I-819   Provider overload         RESOLVED
+I-812   Plugin activation failed  MITIGATED
+
+SELECTED INCIDENT
+────────────────────────────────
+Domain         RUNTIME_CODEX
+Run            R-821
+Task           Coding / Runtime Router
+First Seen     14:02
+Occurrences    17
+
+Runtime
+Current        0.B
+Last-Good      0.A
+Protocol       Changed
+Contract       FAILED
+
+Evidence
+CrashEnvelope        ✓
+Contract Test        ✓
+Provider Summary     ✓
+User Content         Not collected
+
+[Open Runtime]
+[Use Last-Good]
+[Create Support Bundle]
+```
+
+默认 UI 不暴露大量滚动日志。只有 Advanced/Developer 才可以打开安全日志流。
+
+---
+
+# 655. v0.46 Diagnostics / Support Bundle Fault-injection Matrix
+
+实现阶段至少覆盖：
+
+```text
+Tauri UI crash while Mission runs
+workbenchd panic during idle
+workbenchd panic during active Run
+Codex child process crash
+DeepSeek protocol mismatch after update
+Plugin crash loop
+Parser sidecar crash
+SQLite migration failure
+SQLite integrity failure
+429 burst + Runtime crash overlap
+OOM / memory pressure
+Disk full during logging
+Disk full during Support Bundle build
+Secret printed by Tool
+Secret embedded in command argument
+Secret embedded in environment value
+Private Memory selected in a Run
+Raw Tool Output contains credential
+TRACE left enabled then TTL expires
+Support Bundle build interrupted
+```
+
+Acceptance：
+
+```text
+Mission 状态不被 UI crash 误判失败
+Crash Domain 正确
+Incident 聚合而非通知风暴
+诊断默认 0 Token
+默认无自动上传
+P3 Secret 无泄漏
+P2 User Content 默认不导出
+低优先级日志压力不能阻塞执行
+Support Bundle 可预览、可取消、可校验
+Crash Loop 能触发 Quarantine
+Runtime Upgrade Incident 能关联 Last-Good / Contract Diff
+DB 故障仍能进入最低限度 Diagnostics / Recovery
+```
+
+---
+
+# 656. v0.46 Decision Log — Diagnostics / Privacy / Support Bundle
+
+## D-609 — Diagnostics Are Local-first, Zero-token and Zero-upload by Default
+
+**决定：** Linux MVP 的 Diagnostics / Crash Capture / Support Bundle 生成默认只在本机执行，不自动调用 LLM、不自动上传 Telemetry/Crash Dump；未来 opt-in telemetry 必须另立数据字典和策略。  
+**状态：** Accepted
+
+## D-610 — IncidentRecord Is the Structured Diagnostic Truth
+
+**决定：** 显著故障创建结构化 IncidentRecord，并按 UI/workbenchd/Runtime/Plugin/DB/Provider 等 Crash Domain 分类；日志文本是证据而不是唯一状态真源。  
+**状态：** Accepted
+
+## D-611 — CorrelationId Connects Cross-layer Execution Evidence
+
+**决定：** Workbench Command、Task/Run、Adapter、Harness 与 Provider 层尽可能共享稳定 Correlation/Span 关系，使故障调查可沿同一执行链定位，不依赖时间戳猜测。  
+**状态：** Accepted
+
+## D-612 — DiagnosticSnapshot Contains Environment Facts, Not User Content by Default
+
+**决定：** Incident Snapshot 默认记录版本、Protocol/Capability Fingerprint、Contract Test、资源压力、Provider 状态、Schema/Plugin 等环境事实，不复制完整 Prompt、Private Memory、Workspace 内容或 Raw Tool Output。  
+**状态：** Accepted
+
+## D-613 — Diagnostic Data Has Explicit Privacy Classes
+
+**决定：** 诊断数据至少分为 P0 Technical / P1 Private Metadata / P2 User Content / P3 Secret；默认 Support Bundle 允许 P0、最小化 P1、拒绝 P2、永久拒绝 P3。  
+**状态：** Accepted
+
+## D-614 — Support Export Reuses the Secret-aware Redaction Pipeline
+
+**决定：** Support Bundle 出口复用 Credential/Data Egress 的 Secret Detection/Redaction 规则并做二次扫描；写入日志时的 Redaction 不替代导出前扫描。  
+**状态：** Accepted
+
+## D-615 — Core Dumps and Minidumps Are Not Included by Default
+
+**决定：** Linux MVP 不自动采集/上传/打包可能含进程内存内容的 core dump/minidump；未来 Developer opt-in 只能 Local-only、短 TTL 且明确警告。  
+**状态：** Accepted
+
+## D-616 — Support Bundle Uses Explicit Profiles and a Previewable Manifest
+
+**决定：** Support Bundle 采用 MINIMAL / RUNTIME_DIAGNOSTIC / SCOPED_CONTENT Profile，生成前显示 Manifest、包含/排除项与 Redaction 统计；禁止“一键打包整个 Workbench 数据目录”。  
+**状态：** Accepted
+
+## D-617 — Raw Paths, Commands and Environment Values Are Minimized
+
+**决定：** 默认 Bundle 使用 Workspace-relative/匿名 ResourceRef；Command 保存安全摘要而非完整字符串；Environment value 永不进入默认诊断。  
+**状态：** Accepted
+
+## D-618 — Runtime Upgrade Incidents Carry Compatibility Diff Evidence
+
+**决定：** DeepSeek/Codex 更新后发生 Incident 时自动关联 Current/Last-Good Installation、Adapter、Protocol/Capability/Auth/Permission/Error-normalization Contract Diff，使升级问题可直接判断是否回退。  
+**状态：** Accepted
+
+## D-619 — Deep Trace Is Scoped, Bounded and Self-expiring
+
+**决定：** DEBUG/TRACE 仅允许按 Runtime/Run/Plugin/Parser 临时开启，并带 TTL、最大大小和自动关闭；禁止永久全局 TRACE。  
+**状态：** Accepted
+
+## D-620 — Diagnostic Backpressure Must Never Block Product Execution
+
+**决定：** 日志/trace 使用有界异步队列；压力时先丢 DEBUG/TRACE，保留 ERROR/WARN 与 Semantic Receipt，不能因 Diagnostics IO 阻塞 Agent/Workspace/Approval 主路径。  
+**状态：** Accepted
+
+## D-621 — Crash Loops Aggregate Into Incidents and Quarantine
+
+**决定：** 相同 fault fingerprint 的重复 crash 聚合到同一 Incident/occurrence 计数，并联动 Runtime/Plugin Quarantine 与单一 Attention，禁止每次 crash 各自通知。  
+**状态：** Accepted
+
+## D-622 — Diagnostics Must Remain Available During Canonical DB Failure
+
+**决定：** DB/Migration 故障时保留最低限度的 sidecar Startup Incident/Crash Envelope 和 Emergency Read-only Diagnostics，不把“Canonical DB 完全正常”作为故障页面可用前提。  
+**状态：** Accepted
+
+## D-623 — Glass Box and Diagnostics Remain Separate but Deep-linkable
+
+**决定：** Glass Box 服务正常运行透明度，Diagnostics 服务异常调查/Crash/Compatibility/Support Export；二者共享引用和 Deep Link，但不合并成单一超载开发者页面。  
+**状态：** Accepted
+
+## D-624 — Explain Incident Is Optional Agent Work, Not an Automatic Diagnostic Step
+
+**决定：** 用户显式请求时 Agent 可以读取已脱敏 DiagnosticSnapshot 解释 Incident，并产生 DataEgressReceipt；Crash/打开 Diagnostics/生成 Bundle 默认均为 0 Token。  
+**状态：** Accepted
+
+## D-625 — Canary-secret Leakage Tests Are Release-blocking
+
+**决定：** CI/Fault Injection 必须注入已知假 Secret 并验证其不出现在默认日志、CrashEnvelope、Attention、Notification 和 MINIMAL/RUNTIME_DIAGNOSTIC Bundle；失败视为 Release Blocker。  
+**状态：** Accepted
+
+---
+
+# 657. v0.47 — AI-assisted Diagnostics / Agent Log Investigation
+
+用户不仅可以查看 Diagnostics；**Agent 也应该能够在需要时读取可调度的诊断证据，自动完成第一轮故障定位**。这能显著减少人工在 `workbenchd`、DeepSeek/Codex Harness、Agent Run、Plugin、Provider、Workspace 和数据库日志之间来回检索的成本。
+
+但这里必须保持一个关键边界：
+
+```text
+AI 可调查 Execution Evidence
+≠
+AI 可以读取所有隐私数据
+≠
+AI 可以看到隐藏 Chain-of-Thought
+≠
+AI 可以无条件自我修改 Workbench
+```
+
+所谓“每个 Agent 的日志”，在产品语义上定义为该 Agent 的 **Execution Observability**：Run/Task 状态、Tool/Skill/Runtime 事件、Receipt、Provider failure、Workspace ChangeSet、公开的 Agent message、结构化错误和已允许的日志片段。它不包含模型隐藏推理过程，也不因诊断而绕过 Agent Private Memory 隔离。
+
+## 657.1 Diagnostic Investigator 不是第三个常驻 Agent
+
+不新增一个一直运行、持续烧 Token 的 `Diagnostic Agent`。
+
+默认链路：
+
+```text
+Deterministic Incident Detection
+        ↓
+IncidentRecord
+        ↓
+0 Token
+        ↓
+用户点击“AI 分析”
+或 Policy 允许一次性自动分析严重 Incident
+        ↓
+Personal Primary Agent / Selected Agent
+        ↓
+Diagnostic Toolset
+```
+
+因此：
+
+- 正常运行时没有后台 LLM 日志巡检；
+- Crash / 429 / 502 仍先由确定性机制分类；
+- AI 只在真正需要语义归因时介入；
+- 每次分析有 Token/Cost Budget、最大证据量和最大调查轮次。
+
+## 657.2 Diagnostic Toolset 必须强类型、可作用域
+
+建议第一版暴露：
+
+```text
+workbench.incident.get
+workbench.incident.list_related
+workbench.diagnostics.query_events
+workbench.diagnostics.get_snapshot
+workbench.diagnostics.compare_runtime
+workbench.diagnostics.get_resource_pressure
+workbench.diagnostics.get_provider_pressure
+workbench.diagnostics.get_run_receipts
+workbench.diagnostics.get_agent_execution
+workbench.diagnostics.search_redacted_logs
+workbench.diagnostics.build_evidence_bundle
+```
+
+不提供：
+
+```text
+read_all_logs()
+read_all_agent_memory()
+dump_process_memory()
+read_credentials()
+run_as(otherAgent)
+```
+
+所有查询都带 `IncidentRef / AgentRef / RunRef / TaskRef / CorrelationId / timeRange / privacyScope / maxBytes` 等约束。
+
+## 657.3 Agent 日志必须可以跨层关联
+
+一个 Coding Agent 问题可能实际来自：
+
+```text
+Coding Agent
+   ↓
+Task T-82
+   ↓
+Run R-821
+   ↓
+Codex Binding CB-17
+   ↓
+Codex process crash
+   ↓
+Provider 502
+   ↓
+Recovery Epoch 8
+   ↓
+Workspace conflict
+```
+
+AI 调查不是全文 grep 所有日志，而是优先通过 `CorrelationId + RunRef + AgentRef + IncidentRef` 取得最小充分证据，然后按需继续搜索。
+
+这既降低 Token，也能避免“海量日志全部塞给模型”。
+
+## 657.4 AI 默认只读脱敏证据
+
+默认 `DiagnosticEvidenceScope`：
+
+```text
+P0 Technical           ALLOW
+P1 Private Metadata    MINIMIZED
+P2 User Content        DENY BY DEFAULT
+P3 Secret              DENY ALWAYS
+```
+
+因此 AI 可以看到：
+
+```text
+Codex 0.B
+Approval schema mismatch
+17 crashes / 4 min
+Provider 502 x3
+Task T-82
+router.rs changed
+```
+
+但默认看不到：
+
+```text
+API Key
+完整 .env
+其他 Agent Private Memory
+完整 Prompt
+整个 customer source tree
+隐藏推理
+```
+
+如果定位某个代码错误确实必须读取 Workspace 内容，则回到正常 Harness 文件读取和 Data Egress Policy，而不是借 Diagnostics 绕过去。
+
+## 657.5 DiagnosisCandidate 不是事实真源
+
+AI 输出：
+
+```text
+DiagnosisCandidate
+
+suspectedCause
+confidenceBand
+supportingEvidenceRefs
+contradictingEvidenceRefs
+recommendedNextChecks
+repairOptions
+```
+
+它是“诊断候选”，不是系统事实。
+
+例如：
+
+```text
+Suspected cause:
+Codex 0.B approval event incompatible with Adapter A-12
+
+Evidence:
+Contract C-118 FAILED
+Protocol fingerprint changed
+Last-Good 0.A has no failure
+
+Confidence:
+HIGH
+```
+
+只有确定性检测、Contract Test、真实事件、文件/Runtime evidence 才构成可验证事实。
+
+## 657.6 AI 修复必须分等级
+
+### R0 — Explain Only
+
+只解释原因，不改变任何状态。
+
+### R1 — Deterministic Recovery
+
+AI 可以建议或发起现有强类型动作，例如：
+
+```text
+retry_probe
+restart_runtime
+rebuild_projection
+resume_transfer
+re-run_contract_test
+```
+
+实际动作仍由 `workbenchd` deterministic subsystem 执行。
+
+### R2 — Configuration / Runtime Remediation
+
+例如：
+
+```text
+rollback Codex 0.B → Last-Good 0.A
+quarantine plugin
+reduce native workers
+change approved Runtime slot
+```
+
+需要遵守已有 Policy / expectedRevision / CommandReceipt；安全相关变化按现有确认规则执行。
+
+### R3 — Task / Workspace Repair
+
+如果是项目代码、配置、测试导致问题，Agent 可以创建 Repair Task，通过正常 DeepSeek/Codex Harness 执行：
+
+```text
+Safety Point
+→ edit
+→ test
+→ review
+→ ChangeSet
+```
+
+Diagnostics 只负责提供证据，不能绕过 Harness 原生权限。
+
+### R4 — Workbench Source-level Self Repair
+
+仅 Developer / Source Workspace 场景允许。
+
+AI 可以针对 Workbench 自己的源码提出 Patch，但必须走：
+
+```text
+Issue / Incident
+→ Repair Branch / Worktree
+→ Coding Agent
+→ Tests
+→ Review
+→ Build
+→ Compatibility Tests
+→ Human acceptance / normal release pipeline
+```
+
+**禁止 AI 直接 patch 当前正在运行的 `workbenchd` binary、直接替换生产安装、修改 Secret Store 或绕过 Update/Last-Good。**
+
+## 657.7 Repair Loop 必须有硬上限
+
+禁止：
+
+```text
+发现错误
+→ AI 修
+→ 又错
+→ AI 再修
+→ 无限循环
+```
+
+每个 Incident 有：
+
+```text
+maxDiagnosisTurns
+maxRepairAttempts
+maxTokenBudget
+maxCostBudget
+maxWallTime
+requiredReviewLevel
+```
+
+同一 fault fingerprint 多次失败后：
+
+```text
+AUTO_REPAIR_STOPPED
+→ Attention
+```
+
+而不是继续烧 Token。
+
+## 657.8 Diagnostics UI 增加 AI Investigator，但不取代原始证据
+
+```text
+INCIDENT / I-821
+────────────────────────
+Codex crash loop
+QUARANTINED
+
+Evidence
+17 crashes
+Protocol changed
+Contract failed
+[AI Analyze]
+[Open Raw Diagnostic Facts]
+[Rollback to Last-Good]
+```
+
+AI 分析后：
+
+```text
+AI INVESTIGATION
+
+Likely cause
+Approval protocol regression after Codex update
+
+Evidence
+3 linked receipts
+1 compatibility diff
+
+Suggested action
+Rollback to Last-Good
+
+[View Evidence]
+[Preview Repair]
+```
+
+用户永远可以直接查看机器事实，不能只能看 AI 总结。
+
+---
+
+# 658. v0.47 — Performance / Stress / Fault-injection Verification Framework
+
+到当前阶段，不应该再为每个子系统分别声明几十个漂亮的性能数字而缺少一个统一验收框架。v0.47 将已有 Workspace、Agent、Memory、Project、Provider、Runtime、Persistence、Diagnostics 性能目标统一为 **Release Verification Matrix**。
+
+核心原则：
+
+```text
+Performance Budget
++ Resource Budget
++ Fault Injection
++ Recovery Invariant
+= Release Gate
+```
+
+不是只测“Happy Path 很快”。
+
+## 658.1 四类性能预算
+
+### A. Human Interaction Budget
+
+本地、不需要模型的交互目标继续以低延迟为主：
+
+```text
+Composer key feedback             P95 < 16ms
+Surface switch (cached)           P95 < 100ms
+Local projection first read       P95 < 30–50ms
+Event → visible status            P95 < 150ms
+Explorer cached first paint       P95 < 30ms
+Explorer uncached local           P95 < 80ms
+Indexed filename / FTS search     P95 < 30–50ms
+```
+
+模型首 Token 不属于本地 UI 延迟预算。
+
+### B. Scale Budget
+
+必须验证而不是只在设计里假设：
+
+```text
+100k Explorer rows       bounded DOM / virtualization
+100k Conversations       paged projection
+100k Memory records      indexed scoped retrieval
+1M semantic events       no full scan on normal page open
+large Workspace          no full tree in JS memory
+large raw tool output    sidecar + projection
+```
+
+MVP 不要求“无限规模”，但要求规模上升时退化方式可预测。
+
+### C. Runtime / Concurrency Budget
+
+压力测试包含：
+
+```text
+1 interactive Agent
+4–8 logical parallel Tasks
+Harness native subagents
+shared API credential
+multiple Missions
+background Transfers
+Workspace watcher/indexing
+```
+
+实际远程并发仍由 Provider Traffic Controller / Token Pressure / Local Resource Governor admission，不以 Planner 的逻辑并行度为准。
+
+### D. Durability / Recovery Budget
+
+验证：
+
+```text
+workbenchd restart
+UI crash
+Harness crash
+network loss
+sleep/wake
+machine reboot
+DB WAL recovery
+transfer resume
+runtime upgrade rollback
+```
+
+系统恢复速度重要，但“不能重复副作用”优先于恢复快。
+
+## 658.2 统一 Resource Envelope
+
+每个运行节点都进入统一资源投影：
+
+```text
+CPU
+RSS / memory
+PID / child process
+FD
+Disk IO
+Log growth
+Cache growth
+Provider RPM/TPM
+Token reservation
+Runtime workers
+Transfer bandwidth
+```
+
+Scheduler 最终 admission：
+
+```text
+Task Runnable
+∩ Provider Capacity
+∩ Token Capacity
+∩ Local Resource Capacity
+∩ Workspace Safety
+∩ Runtime Capability
+= ADMITTED
+```
+
+资源不足进入等待态，不伪装失败。
+
+## 658.3 必测“组合故障”，而不是单点故障
+
+真实事故通常不是一个条件。
+
+v0.47 最低组合矩阵：
+
+```text
+20 runnable Tasks + shared API key + 429 burst
+429 + 502 alternating + Retry-After variance
+Harness crash while provider pressured
+stream disconnect after file write
+UI crash while Mission running
+workbenchd crash during Tool side effect
+sleep during WAITING_APPROVAL
+reboot during Transfer VERIFYING
+runtime upgrade + approval schema change
+runtime upgrade + auth contract change
+DB migration + disk full
+SQLite WAL + process kill
+log flood + low disk
+OOM pressure + native subagent burst
+Workspace watcher storm + large repo
+user edits file during Recovery reconciliation
+plugin crash loop + Mission critical path
+Secret emitted during crash + Support Bundle build
+```
+
+## 658.4 Fault Injection 必须验证 Invariant
+
+每个测试不只看“最后绿了没有”，而是验证：
+
+```text
+Task 没被错误标记 semantic FAILED
+Mission 没因局部 transient failure 错误失败
+Side effect 不盲目重放
+Old epoch event 不覆盖新 epoch
+Pinned Runtime/Model 不偷偷 fallback
+Private Memory 不跨 Agent 泄漏
+Secret 不进入默认日志/Bundle
+429 不造成 Retry Storm
+Main Chat 不被 background Mission 饿死
+Waiting user / rate limit 时不持续烧 Token
+Projection 可从 Canonical Truth 重建
+Rollback 后 Last-Good 可再次运行
+```
+
+## 658.5 Token Efficiency 进入性能测试，不再只测金额
+
+同一个典型工程任务建立基线：
+
+```text
+Raw Context Tokens
+Projected Context Tokens
+Tool Output Raw Bytes
+Tool Output Model Bytes
+Repo Map Tokens
+Repeated Evidence Tokens
+Handoff Tokens
+Total Provider Input/Output
+```
+
+Release regression 可以发现：
+
+```text
+某次改动让平均 Context +45%
+```
+
+即使功能仍然正确，也要阻止明显 Token 膨胀进入发布。
+
+建议不设一个跨所有任务的固定“必须节省 80%”指标，而使用 scenario-specific baseline + regression threshold。
+
+## 658.6 AI Diagnostics 自己也进入压力预算
+
+AI Investigator 不能在事故发生时反而制造第二次流量风暴。
+
+例如 20 个 Agent 同时报错，不允许：
+
+```text
+20 Incidents
+→ 20 LLM diagnosis calls simultaneously
+```
+
+默认：
+
+```text
+Incident dedupe / coalesce
+→ deterministic triage
+→ priority queue
+→ one/few scoped AI investigations
+```
+
+并受同一个 Provider Traffic / Token Pressure Controller 管理。
+
+## 658.7 Soak Test：连续运行比峰值 Benchmark 更重要
+
+Linux Workbench 的核心承诺是能跑几小时甚至几天，因此 Release Candidate 需要长时间 Soak Test：
+
+```text
+8h normal mixed workload
+24h background Mission / idle / resume cycle
+72h optional pre-release soak
+```
+
+观察：
+
+```text
+RSS 是否持续增长
+FD 是否泄漏
+child process 是否残留
+log/cache 是否无限增长
+SQLite WAL/checkpoint 是否正常
+Projection lag 是否累积
+Runtime warm pool 是否回收
+queued tasks 是否出现 starvation
+Provider retry 是否积累
+```
+
+不是要求模型连续调用 72 小时；Soak 可以包含大量 deterministic simulated runtime/provider events，避免无意义烧 API 费用。
+
+## 658.8 Release Gate 分层
+
+```text
+PR Gate
+unit / contract / deterministic fault tests
+
+Nightly
+scale / concurrency / migration / provider simulation
+
+Release Candidate
+real Harness compatibility + soak + upgrade/rollback + privacy tests
+
+Manual Hardware Matrix
+low-memory laptop / normal workstation / large workspace
+```
+
+云 Provider 的真实故障难以稳定复现，因此测试框架使用 Provider Simulator 注入 429/5xx/latency/disconnect；真实 Provider smoke 只作为补充。
+
+---
+
+# 659. v0.47 Decision Log — AI Diagnostics & Performance Verification
+
+## D-626 — AI May Investigate Diagnostics, but Diagnostics Remain Deterministic Truth
+
+**决定：** 用户可让 Personal Primary Agent 或指定 Workbench Agent 读取受控 Diagnostic Evidence 调查 Incident；AI 的 DiagnosisCandidate 是解释/假设，不替代 Incident/Event/Receipt/Runtime/Workspace 的机器事实。  
+**状态：** Accepted
+
+## D-627 — Agent Logs Mean Execution Observability, Not Hidden Reasoning
+
+**决定：** “Agent 日志”定义为 Agent/Run/Task/Tool/Skill/Runtime/Provider/Workspace 的可观测执行事实和已允许内容，不采集或展示模型隐藏 Chain-of-Thought，也不借诊断绕过 Private Memory 隔离。  
+**状态：** Accepted
+
+## D-628 — AI Diagnostic Access Is Scoped and Redacted by Default
+
+**决定：** Diagnostic Toolset 必须按 Incident/Agent/Run/Task/Correlation/time/size/privacy scope 查询；默认允许 P0、最小化 P1、拒绝 P2、永远拒绝 P3 Secret。需要项目源码时走正常 Workspace/Harness/Data Egress 路径。  
+**状态：** Accepted
+
+## D-629 — There Is No Always-on LLM Diagnostic Poller
+
+**决定：** Incident 发现、Crash 聚合、Provider 分类和健康检查保持 deterministic/0-token；AI 调查按用户请求或有限策略触发，带 Token/Cost/Turn/Wall-time Budget。  
+**状态：** Accepted
+
+## D-630 — AI Repair Uses Existing Control, Permission, Safety and Review Paths
+
+**决定：** AI 可提出 RepairPlan 并调用已有强类型 Recovery/Control Tool；项目修复通过 Harness 原生权限 + Safety Point + Test + Review 执行，不建立“诊断特权执行通道”。  
+**状态：** Accepted
+
+## D-631 — Installed Workbench Cannot Self-patch Production Binaries Through an Agent
+
+**决定：** AI 不得直接修改正在运行的 workbenchd/Tauri binary、Secret Store 或任意安装槽。Workbench 源码自修仅在 Developer Source Workspace 中通过普通分支/测试/Review/Build/Release pipeline 完成。  
+**状态：** Accepted
+
+## D-632 — Automated Repair Is Bounded and Stops on Repeated Failure
+
+**决定：** 每 Incident 有最大诊断轮次、修复次数、Token/Cost/Wall-time 与 Review policy；重复相同 fault 后进入 AUTO_REPAIR_STOPPED + Attention，禁止无限自修循环。  
+**状态：** Accepted
+
+## D-633 — Performance and Fault Injection Are Release Gates
+
+**决定：** 已有 UI/Workspace/Search/Memory/Provider/Recovery/Diagnostics 性能预算统一进入 Release Verification Matrix，不能仅依赖 Happy-path demo 判断可发布。  
+**状态：** Accepted
+
+## D-634 — Scale Tests Verify Bounded Memory and Incremental Work
+
+**决定：** 100k Explorer rows、100k Conversation/Memory records、1M Semantic Events 和大型 Workspace 场景必须验证 virtualization/pagination/index/incremental projection；普通页面打开不得退化为全库/全树扫描。  
+**状态：** Accepted
+
+## D-635 — Combination Faults Are Mandatory
+
+**决定：** Release tests 必须组合 Provider throttle、Harness crash、side effect、DB/disk、OOM、sleep/reboot、upgrade、user edit 等条件，验证 cross-system recovery invariant，而非只单独 mock 一个错误码。  
+**状态：** Accepted
+
+## D-636 — Token Consumption Has Regression Tests
+
+**决定：** 典型任务记录 Raw/Projected Context、Tool Output、Repo Map、Handoff 与总 Provider Token baseline；Token 明显回归即使功能正确也必须调查。压缩指标按 scenario baseline 管理，不设虚假的统一节省百分比。  
+**状态：** Accepted
+
+## D-637 — Soak Tests Verify Long-running Linux Stability
+
+**决定：** Release Candidate 包含小时级/天级 Soak，重点验证 RSS/FD/PID/log/cache/WAL/projection lag/warm-pool/starvation/retry accumulation；可大量使用 deterministic simulator，避免为了测试稳定性无意义消费云模型。  
+**状态：** Accepted
+
+## D-638 — AI Incident Analysis Shares Provider Traffic and Token Budgets
+
+**决定：** AI Diagnostics 本身也是云模型负载，必须经过 Provider Traffic Controller、Token Pressure 和 priority/fairness admission；多 Incident 先 dedupe/triage，不并发制造诊断调用风暴。  
+**状态：** Accepted
+
+
+# 660. v0.48 — Log Lifecycle / Retention / Storage Budget
+
+用户提出的“日志运行越久，本地或服务器空间会越来越夸张”不是单纯的清理设置，而是长期运行 Agent Workbench 必须具备的 **Log Lifecycle Policy**。日志若无界增长，会同时造成磁盘占满、Backup 膨胀、Diagnostics 变慢、隐私暴露窗口变长，甚至反过来导致 workbenchd/SQLite/Runtime 失败。
+
+核心原则：
+
+```text
+日志不是永久历史
+日志有生命周期
+日志保留必须同时受：时间 + 空间 + 重要性 + Incident 状态约束
+```
+
+## 660.1 不同数据不能统一“30 天全部删除”
+
+必须区分：
+
+```text
+RAW / TRACE / DEBUG LOGS
+临时诊断证据
+→ 短生命周期
+
+INFO / WARN / ERROR DIAGNOSTIC LOGS
+较高诊断价值
+→ 中生命周期
+
+SEMANTIC EVENT / RECEIPT
+Task/Run/Approval/Recovery/Workspace 等产品执行证据
+→ D1 Durable Evidence，不等同 raw log
+
+INCIDENT SUMMARY
+故障聚合事实
+→ 小体积、较长保留
+
+CANONICAL PRODUCT DATA
+Agent / Memory / Mission / Decision / Conversation
+→ 不受日志 TTL 删除
+```
+
+因此 Linux MVP 的 `30 days` 是 **默认本地 diagnostic log retention**，不是“30 天后把所有 Event/Receipt/Agent 历史都删掉”。
+
+## 660.2 Linux MVP 默认 Retention
+
+建议默认：
+
+```text
+TRACE                    24h–72h
+DEBUG                    7 days
+INFO                     14 days
+WARN / ERROR raw logs    30 days
+Runtime raw stdout/stderr 14–30 days，且受 size cap
+Crash artifacts           30 days / capped count
+Deep Trace                自身 TTL（例如 15min capture + 7d artifact）
+IncidentRecord            长期小体积保留，直到用户/策略清理
+Semantic Receipt/Event    按 D1 evidence policy，不跟 raw log 一起删除
+Support Bundle            用户显式管理；默认不自动无限保留
+```
+
+具体数字全部是 Admin/System Policy 可配置项；Linux MVP 默认值以“30 天诊断窗口 + 有界磁盘”为目标。
+
+## 660.3 只按时间删除不够，必须有磁盘预算
+
+如果一天生成 20GB，等 30 天才删已经太迟。因此同时设置：
+
+```text
+Diagnostics Budget
+- max total bytes
+- max bytes per runtime
+- max bytes per incident
+- max files / segments
+- minimum free disk watermark
+```
+
+触发磁盘压力时，清理顺序：
+
+```text
+expired TRACE
+→ old DEBUG
+→ old INFO
+→ unpinned raw runtime logs
+→ old raw WARN/ERROR segments whose Incident summary/evidence already exists
+```
+
+永远不能为了日志空间清理 D0 Canonical Product Data。
+
+## 660.4 Log Segment / Rotation
+
+workbenchd 和 Runtime 输出不允许无限写一个文件：
+
+```text
+runtime.log
+→ runtime.log.001
+→ runtime.log.002
+...
+```
+
+使用 segment rotation（按 size/time），每个 segment 有：
+
+```text
+createdAt
+closedAt
+byteSize
+level range
+runtime/agent/run/correlation refs
+privacy class
+retentionClass
+pinnedByIncident
+```
+
+Retention Worker 只删除已关闭 segment；当前活跃 segment 通过 rotate 后再处理。
+
+## 660.5 未解决 Incident 可以 Pin，但不能永久无限占空间
+
+当 Incident 仍 OPEN / QUARANTINED / NEEDS_USER 时，可以自动 Pin 相关的最小 raw evidence window，例如：
+
+```text
+Incident I-821
+± 10 minutes runtime logs
+related run/provider events
+contract diff
+```
+
+而不是 Pin 整个 30 天日志目录。
+
+Incident 解决后：
+
+```text
+raw evidence pin grace period
+→ deterministic roll-up 已确认
+→ normal retention resumes
+```
+
+用户也可以手动 `Preserve Evidence`，但 UI 必须显示占用空间并允许取消。
+
+## 660.6 删除前做 deterministic roll-up，不用 LLM 总结
+
+删除大量 Telemetry/Raw Logs 前，可以保留小体积结构化摘要：
+
+```text
+Runtime 0.152
+14:00–16:00
+429: 18
+502: 4
+crash: 3
+restart: 2
+approval timeout: 1
+Incident: I-821
+```
+
+这由计数器/Event Projection 生成：
+
+```text
+0 Token
+0 LLM call
+```
+
+AI 以后调查老 Incident 时，先读取 Incident/Semantic Receipt/Roll-up；如果 raw logs 已按策略删除，UI/Agent 必须明确显示 `RAW_EVIDENCE_EXPIRED`，不能伪装仍有完整证据。
+
+## 660.7 Backup 不应成为“日志永不删除”的后门
+
+普通 Workbench Backup 默认：
+
+```text
+INCLUDE
+Canonical DB
+D0 product data
+必要 D1 durable evidence
+IncidentRecord / compact roll-up
+Backup manifest
+
+EXCLUDE
+raw runtime logs
+TRACE/DEBUG streams
+raw stdout/stderr sidecar
+core/minidump
+Deep Trace artifacts
+普通 Support Bundle
+cache/index/preview
+```
+
+原因：如果每晚 Backup 把 30 天 raw logs 永久复制进备份，Retention 设计等于失效，而且 Backup 会迅速膨胀并扩大隐私暴露面。
+
+如果企业或开发场景需要长期保存某个 Incident：
+
+```text
+Pin Incident Evidence
+或
+显式导出 Scoped Support Bundle
+```
+
+而不是把所有日志放进常规备份。
+
+## 660.8 Restore 后也必须执行 Retention
+
+恢复一个 6 个月前的 Backup 时，不应把其中已超当前策略保留期的 diagnostics 永久复活。Restore 完成 staging validation 后：
+
+```text
+apply current retention policy
+→ mark expired diagnostic artifacts
+→ delete/reclaim after cutover
+```
+
+Canonical Product Data 不受该规则影响。
+
+## 660.9 Server / Relay 未来也复用同一原则
+
+Android/Relay 目前不属于 Linux MVP，但未来若出现 Workbench Server / Relay：
+
+```text
+server logs
+push delivery logs
+remote command logs
+```
+
+同样必须：
+
+```text
+age TTL
++ size quota
++ privacy class
++ incident pin
++ deterministic roll-up
+```
+
+而不是因为“服务器磁盘更大”就无限保存。
+
+## 660.10 UI
+
+System → Diagnostics → Storage：
+
+```text
+DIAGNOSTIC STORAGE
+
+Used            3.8 GB
+Budget          5.0 GB
+Oldest raw log  18 days
+Default TTL     30 days
+Pinned evidence 420 MB
+
+TRACE            80 MB
+DEBUG           310 MB
+INFO            1.1 GB
+WARN/ERROR      640 MB
+Runtime raw      1.3 GB
+Crash/Incident  370 MB
+
+[Clean Now]
+[Retention Policy]
+[Review Pinned Evidence]
+```
+
+`Clean Now` 只执行当前策略允许的 deterministic cleanup，不让模型决定删什么。
+
+---
+
+# 661. v0.48 — Linux MVP Scope Freeze
+
+现在产品功能面已经足够完整。Linux MVP 的目标不再是“把所有已设计能力都实现”，而是跑通一个可信、长期稳定、可恢复、成本可控的 AI Team Workbench 核心闭环。
+
+## 661.1 P0 — Linux MVP 必须实现
+
+### Product Shell / Agent
+
+```text
+Route 3 Hybrid Agent-centered Shell
+Personal Primary Agent
+MY WORK
+Composer (+ / @ / basic / Skill intent)
+Agent Library basic create/install/config
+Per-Agent Private Memory baseline
+Glass Box basic runtime/task/context/cost view
+```
+
+### Core Runtime
+
+```text
+DeepSeek Harness Adapter
+Codex Harness Adapter
+Auto / DeepSeek / Codex / Hybrid basic routing
+Runtime Capability Probe
+Managed + External Runtime discovery/install baseline
+Version Slot / Last-Good / Compatibility Gate
+Native permissions / approvals projection
+```
+
+### Project / Collaboration
+
+```text
+Project
+Room
+Room Coordinator
+Mission
+Mission Lead
+Task Graph
+Scheduler
+basic Team Assembly
+structured Handoff / Review
+Attention
+```
+
+AUTO TEAM MVP 重点是：
+
+```text
+能规划少量并行 Task
+能分配现有 Agent
+能安全暂停/恢复/重试
+能显示真正进度
+```
+
+不是第一版就自动生成几十个临时 Agent 和复杂组织结构。
+
+### Durable Execution / Cost / Capacity
+
+```text
+workbenchd Linux user service
+Durable Mission state
+Run Lease / Fencing Epoch
+Recovery Capsule
+Uncertain-effect Reconciliation
+Provider Traffic Controller
+Rate-limit-aware queue
+Token Lease / Context Budget
+basic cost/usage projection
+WAITING_CAPACITY / WAITING_RATE_LIMIT / WAITING_APPROVAL
+```
+
+### Workspace
+
+```text
+Local Workspace Provider
+Explorer-grade core interactions
+ResourceRef
+Git status/diff
+AI ChangeSet
+Git worktree/branch isolation baseline
+Safety Point / Revert baseline
+Tool-output projection/raw sidecar
+filename/FTS/symbol baseline retrieval
+```
+
+Remote/Mounted/Mirrored Provider 的接口保留，但不是 MVP 必须全部实现。
+
+### Shared Context / Knowledge
+
+```text
+Requirement
+Decision
+Knowledge Note
+Artifact metadata
+Project Baseline Context
+FTS/metadata/symbol retrieval
+No-Embedding baseline
+```
+
+### Persistence / Security / Operations
+
+```text
+single Canonical SQLite
+Migration + pre-migration backup
+Backup/Restore baseline
+Secret Service CredentialStore
+Data Egress policy baseline
+Secret redaction
+IncidentRecord
+Diagnostics
+AI-assisted scoped incident investigation
+Log rotation / retention / disk budget
+Support Bundle MINIMAL + RUNTIME_DIAGNOSTIC
+Bootstrap / install / update / rollback
+```
+
+## 661.2 P1 — Post-MVP，应设计兼容但不阻塞首版
+
+```text
+advanced Skill Studio analytics
+Skill Visual Explain rich renderer
+Plugin Marketplace-like browsing
+advanced Agent Definition packaging/import/export polish
+Project Knowledge advanced governance UI
+full Git AI review provider ecosystem
+Remote Workspace providers
+advanced binary/media preview workflows
+advanced parser ecosystem
+complex Mission playbooks
+long-term autonomous repair policies
+rich Flow/Team/Timeline animations
+custom themes beyond initial theme set
+advanced Cost analytics
+enterprise retention/policy controls
+```
+
+这些能力当前 Schema/Adapter 留接口，但不要求第一条产品闭环具备。
+
+## 661.3 Later — 明确不进入 Linux MVP
+
+```text
+Android Companion
+Remote native approval
+Cloud Relay
+public Agent Marketplace
+Claude Code / OpenCode / OpenClaw ExternalExecutionWorker
+Embedding / Vector DB / Reranker default stack
+LLMLingua-style compression model
+Archscribe deep renderer integration
+large-scale external plugin ecosystem
+multi-machine distributed Scheduler
+server-hosted Workbench control plane
+full enterprise multi-user RBAC suite
+```
+
+其中 External Worker 仍保留 Room/Mission Capability 接口，但 Linux MVP 不因此延迟。
+
+## 661.4 Linux MVP 的“完成”必须是 Vertical Outcome，不是页面数量
+
+MVP 至少跑通：
+
+```text
+Install Workbench
+→ discover/setup one Core Runtime
+→ create/use Personal Primary Agent
+→ bind local Git Workspace
+→ create Project + Room
+→ launch Mission with 2–3 Agents
+→ Scheduler parallelizes safe tasks
+→ Provider/Token controller gates load
+→ Agent edits via native Harness permissions
+→ Git ChangeSet + test/review
+→ one branch waits Approval without token burn
+→ runtime/provider fault injected
+→ workbenchd recovers safely
+→ user reviews Attention
+→ Mission completes
+→ Project Control shows result/cost/change evidence
+→ close/reopen UI without losing Mission truth
+→ diagnostics can explain a fault
+→ backup/restore passes staging validation
+```
+
+如果这条链不稳定，即使 Library/Marketplace/Android/漂亮 Canvas 都完成，也不算 Linux MVP。
+
+## 661.5 Scope Change Rule
+
+从 v0.48 起，新的功能想法默认进入：
+
+```text
+BACKLOG / POST-MVP
+```
+
+只有满足以下之一才允许提升为 P0：
+
+```text
+A. 不实现会破坏数据安全/正确性
+B. 不实现会破坏核心 DeepSeek/Codex Agent 闭环
+C. 不实现会让 Mission 无法可靠恢复
+D. 不实现会造成明显不可接受的 Token/Provider/磁盘成本
+E. 不实现会导致 Linux 首次安装无法完成
+```
+
+“很酷”“未来会需要”“可以更完整”不再作为 P0 理由。
+
+---
+
+# 662. v0.48 Decision Log — Log Lifecycle & Linux MVP Scope
+
+## D-639 — Diagnostic Logs Have Explicit Lifecycle
+
+**决定：** Raw/TRACE/DEBUG/INFO/WARN/ERROR diagnostics 不是永久历史；Linux MVP 默认建立 age-based retention，普通本地诊断窗口目标为 30 天，同时按 log level 使用更短 TTL。  
+**状态：** Accepted
+
+## D-640 — Retention Uses Time and Storage Budgets Together
+
+**决定：** 不能只“30 天后删除”；Diagnostics 同时受总字节预算、per-runtime/per-incident cap 与 minimum-free-space watermark 控制，磁盘压力可提前清理低价值日志。  
+**状态：** Accepted
+
+## D-641 — Durable Evidence Is Not Raw Log
+
+**决定：** Semantic Event、Receipt、IncidentRecord 等 D1 evidence 与 raw runtime logs 分离；30 天 raw-log TTL 不得删除 Mission/Task/Workspace/Approval/Recovery 等产品真源或必要 durable evidence。  
+**状态：** Accepted
+
+## D-642 — Unresolved Incidents Pin Only Minimal Evidence Windows
+
+**决定：** OPEN/QUARANTINED Incident 可自动 Pin 相关最小时间窗/Run/Correlation 的 raw evidence，不允许因一个 Incident 永久锁住完整日志目录；解决后经过 grace period 恢复正常 retention。  
+**状态：** Accepted
+
+## D-643 — Expiring Logs Produce Deterministic Roll-ups, Not LLM Summaries
+
+**决定：** Telemetry/raw diagnostics 到期前可保留结构化计数/错误/关联 Incident roll-up，默认 0 Token；如果 raw evidence 已删除，AI Diagnostics 明确报告 RAW_EVIDENCE_EXPIRED。  
+**状态：** Accepted
+
+## D-644 — Normal Backup Excludes Raw Diagnostic Logs
+
+**决定：** Workbench Backup 默认不包含 raw Runtime logs、TRACE/DEBUG streams、core/minidump、Deep Trace 和普通 Support Bundle；否则 Backup 会抵消 Retention、无限膨胀并扩大隐私暴露。长期保留必须通过 Pin Incident 或显式 Scoped Export。  
+**状态：** Accepted
+
+## D-645 — Restore Reapplies Current Retention Policy
+
+**决定：** 恢复历史 Backup 后，diagnostic artifact 仍按当前 retention/expiry 重新评估，不能借 Restore 永久复活过期日志；Canonical Product Data 不受影响。  
+**状态：** Accepted
+
+## D-646 — Linux MVP Scope Is Frozen by Vertical Outcome
+
+**决定：** Linux MVP 以 Personal Agent → Project/Room/Mission → DeepSeek/Codex execution → Workspace change/review → recovery/attention/diagnostics 的端到端闭环为 P0，而非实现全部已设计 Surface。  
+**状态：** Accepted
+
+## D-647 — Android, Relay and Remote Approval Are Later
+
+**决定：** Android Companion、Relay、Remote Native Approval 明确保留接口但不进入 Linux MVP。  
+**状态：** Accepted
+
+## D-648 — External Execution Workers Are Later
+
+**决定：** Claude Code/OpenCode/OpenClaw/ACP ExternalExecutionWorker 保持 RoomWorkerCapability 架构边界，但不作为 Linux MVP 发布阻塞项；Direct Agent Runtime 仍只有 DeepSeek/Codex。  
+**状态：** Accepted
+
+## D-649 — No-Embedding Retrieval Remains the MVP Baseline
+
+**决定：** MVP 继续采用 FTS/BM25/metadata/path/symbol/relation + 当前主模型推理；Embedding/Vector/Reranker/专用压缩模型都不成为首版安装和成本依赖。  
+**状态：** Accepted
+
+## D-650 — Remote Workspace Breadth Does Not Block MVP
+
+**决定：** MVP 必须把 Local Workspace + Git 工作链做好；Remote/Mounted/Mirrored Provider 保留抽象和后续实现，不要求首版全部支持。  
+**状态：** Accepted
+
+## D-651 — New Ideas Default to Post-MVP Unless They Protect Core Correctness
+
+**决定：** v0.48 之后新增能力默认进入 Backlog/Post-MVP；只有涉及安全/正确性、核心 Runtime 闭环、Recovery、不可接受成本或首次安装可用性的能力才能提升 P0。  
+**状态：** Accepted
+
+## D-652 — MVP Must Pass the Defined End-to-End Recovery Scenario
+
+**决定：** Linux MVP 发布前必须通过安装、Runtime、Agent、Project/Room/Mission、并行调度、Workspace change/review、approval wait、provider/runtime fault、recovery、diagnostics、backup/restore 的一条真实 Vertical Scenario；页面完成度不能替代该验收。  
+**状态：** Accepted
+
+# 663. v0.49 Code-level System Architecture — Rust / Tauri / React / workbenchd Module Boundaries
+
+这一轮不再新增产品能力，而是把已经冻结的 Linux MVP 变成真正能开始写代码的工程边界。
+
+核心目标不是“目录看起来整齐”，而是保证下面这些约束能由代码结构本身帮助执行：
+
+```text
+UI 不拥有产品真源
+Tauri 不变成第二个 workbenchd
+Runtime Adapter 不直连 SQLite
+Scheduler 不理解 Codex/DeepSeek 私有协议
+DeepSeek/Codex 升级只主要冲击各自 Adapter
+Linux-specific 代码不渗透整个 Domain
+高频 Event 不把 UI / DB / IPC 打爆
+测试可以在 0 Token 下完整跑 Mission / Recovery
+```
+
+最终进程拓扑：
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ React / TypeScript WebView                                  │
+│ App Shell · Agent · Project · Room · Workspace · System    │
+└───────────────────────┬─────────────────────────────────────┘
+                        │ Tauri invoke/channel
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Tauri Desktop Host (Rust, thin native bridge)               │
+│ Window · Tray · Notification · File Dialog · IPC Bridge     │
+└───────────────────────┬─────────────────────────────────────┘
+                        │ versioned Unix Domain Socket
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│ workbenchd (Rust user service)                              │
+│                                                             │
+│ Command/Query API                                           │
+│ Application Services                                       │
+│ Scheduler / Recovery / PTC / Token / Attention             │
+│ Runtime Supervisor                                         │
+│ Projection / Jobs / Retention / Diagnostics                │
+│                                                             │
+│   ┌───────────────┐        ┌────────────────┐               │
+│   │ Codex Adapter │        │ DeepSeek Adapter│              │
+│   └──────┬────────┘        └───────┬────────┘               │
+└──────────┼─────────────────────────┼─────────────────────────┘
+           │                         │
+           ▼                         ▼
+      Codex Harness             DeepSeek Harness
+
+workbenchd
+   ├── Canonical SQLite
+   ├── Workspace / Git
+   ├── Secret Service
+   └── Parser / Preview child workers as needed
+```
+
+最重要的一条：
+
+> **React 是 View，Tauri 是 Native Shell，workbenchd 才是 Application Host。**
+
+三者不能互相侵占职责。
+
+---
+
+# 664. Repository / Workspace Layout
+
+Linux MVP 建议使用一个 monorepo，同时包含 Rust workspace 与前端 workspace：
+
+```text
+team-workbench/
+│
+├── Cargo.toml
+├── rust-toolchain.toml
+├── pnpm-workspace.yaml
+│
+├── apps/
+│   ├── workbenchd/
+│   │   └── src/main.rs
+│   │
+│   └── desktop/
+│       ├── src-tauri/
+│       │   └── src/main.rs
+│       └── ui/
+│           └── src/
+│
+├── crates/
+│   ├── workbench-protocol/
+│   ├── workbench-domain/
+│   ├── workbench-app/
+│   ├── workbench-store/
+│   ├── workbench-runtime-core/
+│   ├── workbench-runtime-codex/
+│   ├── workbench-runtime-deepseek/
+│   ├── workbench-execution/
+│   ├── workbench-context/
+│   ├── workbench-workspace/
+│   ├── workbench-diagnostics/
+│   └── workbench-platform-linux/
+│
+├── packages/
+│   ├── ui-kit/
+│   └── workbench-client/
+│
+├── migrations/
+├── fixtures/
+└── tests/
+    ├── contract/
+    ├── integration/
+    ├── fault/
+    └── e2e/
+```
+
+这不是要求每一个产品功能都变成独立 crate。
+
+恰恰相反，MVP 要避免：
+
+```textagent-crate
+room-crate
+mission-crate
+task-crate
+attention-crate
+receipt-crate
+...
+```
+
+这种过度碎片化。
+
+crate 只在下面情况成立时拆：
+
+```text
+A. 有明确稳定依赖方向
+B. 有明显独立测试边界
+C. 需要隔离上游高变更依赖
+D. 需要隔离平台代码
+E. 需要单独复用 / 编译
+```
+
+因此 DeepSeek/Codex Adapter 值得独立 crate，因为它们正是最容易被上游升级影响的边界。
+
+---
+
+# 665. Rust Dependency Firewall
+
+建议依赖关系固定为：
+
+```text
+workbench-protocol
+       │
+       ▼
+workbench-domain
+       │
+       ▼
+workbench-app
+       │
+       ├───────────────┐
+       ▼               ▼
+workbench-execution   workbench-context
+       │               │
+       └───────┬───────┘
+               ▼
+     Infrastructure Ports
+        /       |       \
+       ▼        ▼        ▼
+    store    runtime   workspace
+                         │
+                         ▼
+                  platform-linux
+```
+
+实际 Rust crate 可有少量横向共享类型，但必须遵守几个硬规则：
+
+```text
+Domain
+- 不依赖 Tauri
+- 不依赖 SQLite
+- 不依赖 Tokio process
+- 不依赖 Codex/DeepSeek SDK/协议
+
+Tauri Host
+- 不依赖 Scheduler internals
+- 不直接依赖 Store
+- 不持有 Runtime Adapter
+
+Runtime Adapter
+- 不拿 SQLite Connection
+- 不调用 React/Tauri
+- 不读取整个 Workbench DB
+
+Frontend
+- 不知道 Codex JSON event shape
+- 不知道 DeepSeek WebSocket/RPC shape
+- 不知道 SQLite schema
+```
+
+这就是“架构边界”真正应该落在代码里的地方。
+
+---
+
+# 666. `workbenchd` Is a Service Host, Not a Giant `main.rs`
+
+`apps/workbenchd/src/main.rs` 只负责 bootstrap / wiring：
+
+```text
+load profile
+acquire profile lock
+open canonical store
+run migration/recovery preflight
+construct services
+bind Unix socket
+start supervised service loops
+wait shutdown signal
+perform drain/checkpoint/shutdown
+```
+
+真正长期运行的服务进入独立模块：
+
+```text
+DaemonServiceSupervisor
+│
+├── IpcServer
+├── ProjectionHub
+├── SchedulerEngine
+├── RecoveryCoordinator
+├── RuntimeSupervisor
+├── ProviderTrafficController
+├── TokenBudgetController
+├── AttentionService
+├── BackgroundJobRunner
+├── TransferCoordinator
+├── RetentionManager
+└── DiagnosticsHub
+```
+
+Rust async runtime 建议使用 Tokio，但要求：
+
+```text
+禁止随意 tokio::spawn 后不保留 Handle
+禁止 unbounded mpsc
+禁止无期限 retry loop
+禁止一个 service panic 把整个 daemon 直接带走
+```
+
+每个长期 task 必须有：
+
+```text
+ServiceId
+CancellationToken
+bounded input queue
+health state
+restart policy
+shutdown deadline
+```
+
+Supervisor 可以判断：
+
+```text
+RESTARTABLE
+QUARANTINE_ON_REPEAT
+FATAL_TO_DAEMON
+```
+
+而不是所有 background task 都用同一种错误处理方式。
+
+---
+
+# 667. Command / Query / Job Is the Application Boundary
+
+Workbench Control Plane 在代码中固定为三类调用：
+
+```text
+Query
+- 只读
+- 不产生产品状态副作用
+
+Command
+- 有明确副作用
+- idempotencyKey
+- 可选 expectedRevision
+- 返回 CommandReceipt
+
+Job
+- 长时间运行
+- 立即返回 JobRef / MissionRef / RunRef
+- 后续由 Projection/Event 观察状态
+```
+
+示例：
+
+```text
+Query
+project.read_state
+attention.list
+agent.resolve
+
+Command
+room.create
+mission.pause
+task.reassign
+
+Job
+mission.launch
+runtime.install
+workspace.transfer
+backup.create
+```
+
+所有真正改变 Canonical State 的路径必须经过 `workbench-app` 的 Application Handler。
+
+禁止：
+
+```text
+RuntimeAdapter -> UPDATE task
+React -> INSERT attention
+Plugin -> direct repository mutation
+```
+
+---
+
+# 668. Transaction + Semantic Event + Receipt Commit Pattern
+
+对于重要 mutation，MVP 固定采用：
+
+```text
+Command
+   ↓
+Application Handler
+   ↓
+Validate
+   ↓
+BEGIN SQLite transaction
+   ↓
+Update Canonical Domain State
+   ↓
+Append Workbench Semantic Event
+   ↓
+Append CommandReceipt / domain receipt
+   ↓
+COMMIT
+   ↓
+Publish committed sequence to ProjectionHub
+```
+
+例如：
+
+```text
+mission.pause
+```
+
+不能出现：
+
+```text
+Mission 已经 PAUSED
+但 Event 没写
+```
+
+也不能出现：
+
+```text
+Event 说 PAUSED
+但 Mission Row 仍 RUNNING
+```
+
+因此 Event + State + Receipt 同事务提交。
+
+ProjectionHub 使用单调递增：
+
+```text
+event_seq
+```
+
+在 daemon crash/restart 后从持久 checkpoint 补投影。
+
+这相当于一个轻量 transactional outbox，不要求引入 Kafka 或额外消息中间件。
+
+---
+
+# 669. IPC Contract — Tauri Does Not Become the API Owner
+
+React WebView 不直接连接 Unix Socket。
+
+链路固定：
+
+```text
+React
+  ↓
+Typed workbench-client
+  ↓
+Tauri command/channel
+  ↓
+Desktop Rust IPC Bridge
+  ↓
+Unix Domain Socket
+  ↓
+workbenchd
+```
+
+MVP IPC 建议使用可调试的 versioned framed JSON，而不是一开始引入复杂 RPC 栈：
+
+```text
+Frame Header
+- protocolVersion
+- requestId
+- messageKind
+- payloadLength
+
+Payload
+- serde JSON DTO
+```
+
+以后如果性能证明 JSON 编码成为真实瓶颈，可在不改变 Application API 的前提下加入新的 codec；首版不要为了“理论性能”牺牲调试和兼容性。
+
+同一个 `workbenchd.sock` 可以接受多条连接：
+
+```text
+RPC connection
+Event/Projection subscription connection
+```
+
+避免大量 projection stream 阻塞普通 command round-trip。
+
+---
+
+# 670. One Schema Source, Generated Rust ↔ TypeScript Types
+
+不维护：
+
+```text
+Rust struct 一份
+TypeScript interface 再手抄一份
+```
+
+`workbench-protocol` 是 IPC DTO 真源。
+
+构建时通过稳定 schema/codegen 工具生成 `packages/workbench-client` 使用的 TypeScript types。
+
+具体工具可在实现 Spike 中比较 `specta` / `ts-rs` 等，但架构要求已经固定：
+
+> **Protocol Type 必须从一个真源产生。**
+
+每个 message envelope 带：
+
+```text
+protocolVersion
+minCompatibleVersion
+clientBuild
+serverBuild
+```
+
+如果 Desktop 新、Daemon 旧或反过来：
+
+```text
+Compatible
+→ 正常连接
+
+Migration/Restart Needed
+→ 进入明确升级流程
+
+Incompatible
+→ 进入 Bootstrap / Diagnostics Surface
+```
+
+绝不静默继续发送双方不同理解的 payload。
+
+---
+
+# 671. Projection Subscription Is Cursor-based and Backpressure-aware
+
+UI 不通过：
+
+```text
+每 500ms query SQLite
+```
+
+刷新状态。
+
+采用：
+
+```text
+Initial Query Snapshot
+        ↓
+Projection Subscription
+        ↓
+ProjectionDelta(seq)
+```
+
+React 客户端记录：
+
+```text
+last_projection_seq
+```
+
+短暂断开后：
+
+```text
+reconnect(from_seq)
+```
+
+如果 gap 仍在 retention/window 内：
+
+```text
+发送 delta
+```
+
+否则：
+
+```text
+RESYNC_REQUIRED
+→ 拉取新的 snapshot
+```
+
+对高频数据必须 coalesce：
+
+```text
+Token stream 300 delta/s
+```
+
+不能全部穿过：
+
+```text
+Daemon → UDS → Tauri → WebView → React render
+```
+
+UI 默认只需要：
+
+```text
+current text chunk
+current task status
+usage aggregate
+important semantic events
+```
+
+因此 stream / telemetry 与 product projection 继续分层。
+
+---
+
+# 672. Tauri Desktop Host Is Intentionally Thin
+
+`src-tauri` 的职责限定为：
+
+```text
+Window lifecycle
+Single-instance behavior
+Tray
+Desktop notification
+Native file/folder picker
+OS open/reveal actions
+Deep link
+Daemon discover/start/reconnect
+Unix IPC bridge
+Emergency diagnostics bootstrap
+```
+
+明确不做：
+
+```text
+Mission Scheduler
+Memory retrieval
+Runtime routing
+SQLite migration
+Provider Traffic Control
+Agent Turn Orchestration
+```
+
+否则以后 Tauri UI 崩溃与 daemon 生命周期又会重新耦合。
+
+如果 `workbenchd` 无法启动，Tauri 只进入：
+
+```text
+BOOTSTRAP / RECOVERY / DIAGNOSTICS
+```
+
+而不是自己临时接管产品逻辑。
+
+---
+
+# 673. Frontend Architecture — Durable Projection State vs Local UI State
+
+React 端状态分两类：
+
+```text
+A. Durable / Server Projection State
+Mission
+Task
+Agent status
+Attention
+Runtime
+Workspace metadata
+Usage
+
+B. Local UI State
+Pane width
+selected tab
+Inspector pinned/hidden
+expanded tree nodes
+Theme
+composer draft
+```
+
+A 的真源永远是 `workbenchd`。
+
+B 可以留在前端本地。
+
+因此不要出现：
+
+```text
+React store:
+mission.status = RUNNING
+```
+
+然后认为产品真的 RUNNING。
+
+对 mutation：
+
+```text
+User clicks Pause
+      ↓
+Command Sent
+      ↓
+CommandReceipt
+      ↓
+Projection update
+      ↓
+UI becomes PAUSED
+```
+
+只对纯 UI、低风险、可立即回退行为做 optimistic update。
+
+前端建议按 Product Surface 组织 feature folder：
+
+```text
+src/
+├── app-shell/
+├── agent/
+├── projects/
+├── rooms/
+├── workspace/
+├── library/
+├── system/
+├── attention/
+├── inspector/
+└── shared/
+```
+
+不是按：
+
+```text
+components/
+hooks/
+utils/
+```
+
+三个巨型垃圾桶组织整个产品。
+
+---
+
+# 674. Frontend Data Libraries Are Replaceable, State Semantics Are Not
+
+实现建议：
+
+```text
+TanStack Query-like cache
+→ Daemon query/projection state
+
+small local store (e.g. Zustand-like)
+→ Shell/UI ephemeral state
+```
+
+但这些属于实现选择，不写进不可替换架构契约。
+
+真正冻结的是：
+
+```text
+Durable state comes from daemon projection
+Local UI state stays local
+IPC client is typed
+lists/timeline/explorer are virtualized
+```
+
+如果以后换库，不应该改 Mission / Runtime / DB 语义。
+
+---
+
+# 675. Canonical SQLite Implementation Shape
+
+在 v0.44 “一个 Canonical SQLite + workbenchd 单写者”的基础上，代码层建议进一步收紧：
+
+```text
+SQLiteStore
+│
+├── WriteExecutor
+│   └── serialized transaction queue
+│
+├── ReadPool
+│   └── bounded read-only/read-mostly connections
+│
+├── MigrationRunner
+├── BackupManager
+└── Repository Modules
+```
+
+MVP 优先考虑 `rusqlite` + 显式 SQL + 专用写事务执行器，而不是用重量 ORM 把事务与查询语义藏起来。
+
+理由：
+
+```text
+SQLite 本身只有一个真正 writer
+Workbench 又明确只有一个 daemon writer
+显式 transaction 对 Event + State + Receipt 更容易审计
+Migration / Backup / integrity control 更直接
+```
+
+这仍属于实现建议；如果 benchmark 后选择其他成熟 Rust SQLite client，也不能破坏单写者与事务边界。
+
+Repository 按领域组织：
+
+```text
+AgentRepository
+ProjectRepository
+MissionRepository
+MemoryRepository
+KnowledgeRepository
+EventRepository
+UsageRepository
+DiagnosticsRepository
+```
+
+但共享同一个 transaction context，不能重新演变为多数据库。
+
+---
+
+# 676. Stable IDs / Revision / Sequence
+
+跨 UI、DB、日志、Runtime、Backup 的产品对象统一使用稳定 ID。
+
+建议：
+
+```text
+UUIDv7 / equivalent time-sortable opaque ID
+```
+
+不把自增数据库主键暴露成产品身份。
+
+状态对象同时有：
+
+```text
+id
+revision: u64
+created_at
+updated_at
+```
+
+高频 event 另有本地严格递增：
+
+```text
+event_seq: i64
+```
+
+用途不同：
+
+```text
+Object ID
+→ 跨机器/Backup/Reference 稳定身份
+
+Revision
+→ optimistic concurrency
+
+Event Seq
+→ 本地投影/恢复顺序
+```
+
+三者不要混为一个字段。
+
+---
+
+# 677. Runtime Adapter Contract Moves to Daemon-side Rust
+
+早期文档中用 TypeScript interface 描述 `RuntimeAdapter`，其**语义保留，但正式实现位置修正为 workbenchd Rust 侧**。
+
+推荐 trait 形状：
+
+```rust
+trait RuntimeAdapter {
+    async fn probe(...);
+    async fn capabilities(...);
+    async fn create_binding(...);
+    async fn start_run(...);
+    async fn send_control(...);
+    async fn resume(...);
+    async fn dispose_binding(...);
+}
+```
+
+事件通过独立 `RuntimeEvidenceStream` 输出。
+
+Adapter 只获得明确 Port：
+
+```text
+ProcessSupervisor
+CredentialBroker
+WorkspaceBindingResolver
+ProviderAdmissionClient
+DiagnosticSink
+```
+
+而不是：
+
+```text
+&WorkbenchDatabase
+&GlobalAppState
+```
+
+这样 Codex/DeepSeek 协议变化只主要影响：
+
+```text
+workbench-runtime-codex
+workbench-runtime-deepseek
+```
+
+不会顺着 dependency graph 污染整个产品。
+
+---
+
+# 678. Runtime Adapter Internal Layers
+
+两个 Adapter crate 都采用相似内部层：
+
+```text
+Installer/Locator
+      ↓
+Process / Transport
+      ↓
+Native Protocol
+      ↓
+Capability Probe
+      ↓
+Input Controller
+      ↓
+Evidence Collector
+      ↓
+Semantic Normalizer
+      ↓
+Usage/Error Mapper
+```
+
+但不能为了统一目录强迫两个 Harness 使用同一种内部实现。
+
+例如：
+
+```text
+Codex
+可能 app-server / thread/session model
+
+DeepSeek Harness
+可能 Node package + 自身 RPC/WebSocket/plugin model
+```
+
+上层只看到统一 Runtime Contract。
+
+每个 Adapter 必须自带 Contract Test fixture，验证：
+
+```text
+probe
+start
+stream
+approval
+interrupt
+resume
+usage
+rate-limit normalization
+shutdown
+```
+
+这样 Harness 更新后 Compatibility Gate 有真实测试对象。
+
+---
+
+# 679. Scheduler / Recovery / PTC Are Separate Engines Sharing Durable Truth
+
+`workbench-execution` 里不实现一个无所不能的 `ExecutionManager`。
+
+明确拆概念：
+
+```text
+Scheduler
+→ 什么 Task 现在允许执行
+
+Provider Traffic Controller
+→ 当前能否发远程模型请求
+
+Token Controller
+→ Context/Token pressure 是否允许
+
+Runtime Supervisor
+→ 哪个 Runtime process/binding 执行
+
+Recovery Coordinator
+→ 上一次结果是否安全继续/replay
+
+Attention
+→ 哪些阻塞需要人处理
+```
+
+一个 Task 从 READY 到真正 Runtime request：
+
+```text
+Task READY
+   ↓
+Scheduler dependency/policy check
+   ↓
+Local resource admission
+   ↓
+Provider/Token lease
+   ↓
+Runtime binding/process lease
+   ↓
+RUNNING
+```
+
+不能让 Runtime Adapter 自己发现 429 后直接把 Task 状态写成 FAILED。
+
+---
+
+# 680. State Machines Prefer Pure Transition Functions
+
+对 Mission / Task / Transfer / RuntimeProcess / Incident 等关键对象，状态转换尽可能写成可独立测试的纯逻辑：
+
+```text
+(current_state, command/event, facts)
+        ↓
+TransitionDecision
+```
+
+例如：
+
+```text
+WAITING_RATE_LIMIT + provider_recovered
+→ QUEUED
+```
+
+而不是散落：
+
+```text
+if (...) task.status = ...
+```
+
+在 18 个 async handler 中。
+
+副作用由 Application Layer 在 transition 被接受后执行。
+
+这样 Fault Injection 能精确测试：
+
+```text
+非法状态跃迁
+重复事件
+旧 epoch
+stale revision
+partial effect
+```
+
+而不用依赖真实模型才能复现。
+
+---
+
+# 681. Agent Turn Orchestration Lives Above Runtime Adapter
+
+持久 Workbench Agent 的一次可见 Turn：
+
+```text
+Resolve Agent
+      ↓
+beforeTurnMemory
+      ↓
+Context / Materialization / Skill Exposure
+      ↓
+Runtime Router
+      ↓
+DeepSeek or Codex RuntimeAdapter
+      ↓
+afterTurnMemory
+      ↓
+Turn / Usage / Receipt commit
+```
+
+这一层属于：
+
+```text
+workbench-app + workbench-context
+```
+
+而不是 Codex Adapter / DeepSeek Adapter。
+
+因此 Runtime 更换后：
+
+```text
+Agent identity
+MemorySpace
+Conversation
+Task
+Project Shared Context
+```
+
+都不会跟着 Adapter 迁移逻辑一起变化。
+
+同理 Workbench Control Tools 由 Application Layer 提供；Harness native file/shell/git tools 继续留在 Harness 内部。
+
+---
+
+# 682. Context / Memory / Search Have a Shared Retrieval Port, Not a Shared Memory
+
+`workbench-context` 可以共享：
+
+```text
+FTS query executor
+metadata resolver
+symbol resolver
+relation resolver
+materialization budget
+context receipt builder
+```
+
+但调用必须总是带显式 Scope：
+
+```text
+AgentPrivateScope
+ProjectSharedScope
+WorkspaceScope
+ConversationScope
+```
+
+不能为了代码复用产生：
+
+```text
+search_everything(query)
+```
+
+这种 API。
+
+Agent private memory 与 Project Shared Context 物理上可以同 DB，代码 Port 仍然分开。
+
+MVP No-Embedding 继续由 SQLite FTS5 / metadata / symbol/path index 等确定性组件支撑。
+
+---
+
+# 683. Workspace / Git / Safety Runs in Daemon-side Infrastructure
+
+React 只使用：
+
+```text
+WorkspaceId
+ResourceRef
+ChangeSetRef
+SafetyPointRef
+```
+
+绝对路径、Git process、hash、snapshot/reflink、transfer checkpoint 等由 daemon 管理。
+
+`workbench-workspace` 建议内部拆：
+
+```text
+WorkspaceRegistry
+LocalWorkspaceProvider
+GitProvider
+ResourceResolver
+ChangeDetector
+SafetyPointManager
+TransferManager
+ParserHost
+PreviewManager
+```
+
+对 shell/Git/外部 parser 统一走受控 child-process abstraction：
+
+```text
+ProcessSpec
+bounded stdout/stderr
+cancellation
+resource budget
+correlation id
+secret redaction
+```
+
+避免每个模块各写一套 `Command::new()`。
+
+---
+
+# 684. Risky Parser / Preview Work Must Not Block workbenchd Core Loop
+
+下面任务可能 CPU/内存很重或输入不可信：
+
+```text
+PDF parse
+thumbnail generation
+ffmpeg metadata/proxy
+3D manifest extraction
+large archive inspect
+```
+
+MVP 可以从 daemon 发起，但必须进入：
+
+```text
+bounded blocking pool
+或
+child worker process
+```
+
+不能在 async reactor thread 中直接执行重 CPU 工作。
+
+以后 ParserProvider 扩展时，可以把不可信 parser 移入更强隔离 sidecar，而不改变 Workspace/Materialization API。
+
+---
+
+# 685. Diagnostics Is a Cross-cutting Sink, Not a Global Logger God-object
+
+所有核心模块可以产生：
+
+```textStructuredDiagnosticEvent
+```
+
+但只通过：
+
+```text
+DiagnosticSink
+```
+
+接口写入。
+
+它负责统一：
+
+```text
+CorrelationId
+Privacy classification
+Redaction
+Sampling
+Retention class
+```
+
+模块不能自行：
+
+```text
+写任意 JSON 到 ~/.cache
+把完整 prompt println!
+把 API key 放 error string
+```
+
+AI-assisted Diagnostics 读取的是 Diagnostics Query/Tool API，而不是给 Agent 一个 `tail -f /var/log/...` 超级权限。
+
+---
+
+# 686. Bundled Capability First; Third-party Dynamic Plugin Loading Does Not Drive MVP Core
+
+虽然 Workbench 已经有完整 Plugin Host / Skill 设计，但 Linux MVP 代码架构不能为了未来 Marketplace 让所有核心模块依赖动态插件机制。
+
+MVP：
+
+```text
+Built-in capabilities
+Bundled/approved Skills
+Runtime-native DeepSeek/Codex extensions
+Stable Extension Interfaces
+```
+
+Post-MVP 再扩大：
+
+```text
+第三方动态 package
+公开 Marketplace
+复杂 hot reload
+```
+
+核心 `Scheduler / Store / Runtime / Workspace` 不允许变成“没有 Plugin Host 就不能启动”。
+
+这与 v0.48 Scope Freeze 一致。
+
+---
+
+# 687. Test Architecture Must Be Able to Run Without Paid Model Calls
+
+从第一天开始提供：
+
+```text
+FakeRuntimeAdapter
+FakeProvider
+FakeWorkspaceProvider
+FakeClock
+DeterministicIdGenerator
+FaultInjector
+```
+
+`FakeRuntimeAdapter` 可以模拟：
+
+```text
+stream text
+request approval
+spawn opaque worker
+429
+502
+crash
+resume success
+resume failure
+usage receipt
+late old-epoch event
+```
+
+因此下面完整链路可以在 CI 零 Token 跑：
+
+```text
+Mission
+→ Scheduler
+→ Provider Admission
+→ Runtime
+→ Approval
+→ Crash
+→ Reconcile
+→ Resume
+→ Review
+→ Complete
+```
+
+真实 DeepSeek/Codex 测试分开：
+
+```text
+Contract Test
+Canary Test
+Optional paid E2E
+```
+
+不能把云 Provider 可用性变成普通单元测试是否通过的前提。
+
+---
+
+# 688. Test Pyramid / Release Layers
+
+建议至少四层：
+
+```text
+L1 Pure Unit
+Domain / state machine / routing / policy
+
+L2 Repository + Adapter Contract
+SQLite / migrations / protocol fixtures / normalization
+
+L3 workbenchd Integration
+IPC / scheduler / recovery / projections / fake runtimes
+
+L4 Real Vertical E2E
+Tauri UI + daemon + one real Runtime + local Git repo
+```
+
+另外独立：
+
+```text
+Fault Injection
+Long Soak
+Token Regression
+Privacy/Secret Leakage
+Upgrade Compatibility
+```
+
+这样真正复杂的 Fault 不会全部依赖 UI 自动化才能发现。
+
+---
+
+# 689. One Concrete Command Flow
+
+用户在 UI 点击：
+
+```text
+Resume Mission
+```
+
+真实路径：
+
+```text
+React Mission Surface
+    ↓
+workbench-client.mission.resume()
+    ↓
+Tauri IPC bridge
+    ↓
+Unix socket request
+    ↓
+workbenchd CommandRouter
+    ↓
+validate protocol / user / idempotency / revision
+    ↓
+MissionApplicationService
+    ↓
+Domain transition validation
+    ↓
+SQLite transaction
+      - mission state update
+      - semantic event
+      - CommandReceipt
+    ↓
+COMMIT
+    ↓
+ProjectionHub seq=N
+    ↓
+Scheduler observes runnable work
+    ↓
+UI receives MissionProjectionDelta
+    ↓
+RUNNING
+```
+
+这里没有一步需要：
+
+```text
+React 猜状态
+Tauri 写 DB
+Agent 自述“已经恢复”
+```
+
+这就是代码级架构是否正确的最直观验证。
+
+---
+
+# 690. Bootstrap Sequence in Code
+
+桌面第一次启动：
+
+```text
+Desktop Host starts
+     ↓
+resolve XDG profile
+     ↓
+connect workbenchd.sock
+     │
+     ├─ exists → handshake
+     │
+     └─ missing → start/activate user daemon
+                    ↓
+                profile lock
+                    ↓
+                DB preflight
+                    ↓
+                migration / recovery sweep
+                    ↓
+                construct service graph
+                    ↓
+                bind IPC
+                    ↓
+                READY
+     ↓
+protocol/capability handshake
+     ↓
+initial shell projection
+     ↓
+React renders My Agent / MY WORK
+```
+
+如果 DB migration 失败：
+
+```text
+Daemon = RECOVERY_REQUIRED
+```
+
+Tauri 仍能打开最小 Bootstrap/Diagnostics UI，但不会自行打开 DB 修复。
+
+---
+
+# 691. Build / Binary Boundary
+
+Linux MVP 的正式产品 binary 尽量保持少：
+
+```text
+team-workbench   ← Tauri Desktop App
+workbenchd       ← user service daemon
+```
+
+DeepSeek/Codex 属于独立 managed/external Runtime installation，不静态链接进 Workbench binary。
+
+parser/preview helper 如果确实需要进程隔离，可增加内部 helper，但不能在第一版无理由制造十几个常驻 daemon。
+
+发布物中的版本信息至少区分：
+
+```text
+Workbench Desktop Build
+workbenchd Build
+IPC Protocol Version
+Database Schema Version
+Codex Adapter Compatibility Version
+DeepSeek Adapter Compatibility Version
+```
+
+这为后续 Runtime Update / DB Migration / Last-Good 提供明确诊断坐标。
+
+---
+
+# 692. Explicit Anti-patterns Before Implementation Starts
+
+以下实现一旦在 code review 出现，应被视为架构回归：
+
+```text
+1. React/Tauri 直接打开 workbench.sqlite3
+
+2. src-tauri/main.rs 逐渐包含 Mission/Scheduler/Runtime 业务逻辑
+
+3. DeepSeek/Codex Adapter 获得 Repository/DB 全局访问权
+
+4. Scheduler 直接解析原生 Codex/DeepSeek event JSON
+
+5. 一个 GlobalAppState 暴露所有内部对象给所有 crate
+
+6. unbounded channel 承载 Runtime stream/log/event
+
+7. 每个 token/event 都 COMMIT SQLite
+
+8. UI 通过高频 polling 获取 Running 状态
+
+9. Rust/TypeScript 手工维护两份 IPC schema
+
+10. Agent Diagnostics 通过 unrestricted filesystem log access 绕过隐私边界
+
+11. 测试必须调用真实付费模型才能完成 Scheduler/Recovery 验证
+
+12. Harness 更新要求修改 React 页面才能兼容
+```
+
+如果我们能守住这些边界，后面功能继续增长时，系统仍然有机会保持可维护。
+
+---
+
+# 693. v0.49 Decision Log — Code-level System Architecture
+
+## D-653 — React Is View, Tauri Is Native Shell, workbenchd Is Application Host
+
+**决定：** Linux Desktop 正式采用 `React -> thin Tauri Host -> versioned Unix IPC -> workbenchd`。Mission、Agent Turn、Scheduler、Runtime、DB、Recovery 等产品逻辑归 workbenchd；Tauri 不成为第二 Application Host。  
+**状态：** Accepted
+
+## D-654 — Rust Workspace Uses Coarse Stable Crate Boundaries
+
+**决定：** 代码按 Protocol / Domain / App / Store / Runtime Core + per-Harness Adapter / Execution / Context / Workspace / Diagnostics / Linux Platform 等稳定边界拆 crate；禁止一对象一 crate 的过度拆分。  
+**状态：** Accepted
+
+## D-655 — DeepSeek and Codex Adapters Are Separate Dependency Firewalls
+
+**决定：** DeepSeek/Codex 的 installer、transport、native protocol、capability/error mapping 与 contract fixtures 分别隔离；上游升级不应要求 UI/Scheduler/Store 理解其私有协议。  
+**状态：** Accepted
+
+## D-656 — RuntimeAdapter Formal Implementation Moves to Rust Daemon
+
+**决定：** 早期 TypeScript RuntimeAdapter 仅保留为语义草图；正式 Adapter Contract 与执行实现位于 workbenchd Rust 侧，Frontend 只消费 Runtime Projection/Control API。  
+**状态：** Accepted
+
+## D-657 — workbenchd Long-lived Tasks Are Supervised and Bounded
+
+**决定：** Daemon 内长期 service 统一具有 cancellation、bounded queue、health、restart policy 与 shutdown deadline；禁止无监管 detached spawn / unbounded channel。  
+**状态：** Accepted
+
+## D-658 — Control Plane Is Query / Command / Job
+
+**决定：** Workbench 对外/Agent Control Tool 的 application API 统一归 Query、Command、Long-running Job 三类；所有 canonical mutation 经过 Application Handler，Command 使用 idempotency/expectedRevision/Receipt。  
+**状态：** Accepted
+
+## D-659 — State + Semantic Event + Receipt Commit Atomically
+
+**决定：** 重要产品 mutation 在同一 SQLite transaction 中提交 Canonical State、Workbench Semantic Event 与 Receipt；Projection 只消费已 commit sequence。  
+**状态：** Accepted
+
+## D-660 — IPC Uses Versioned Typed Schema and Cursor-based Projections
+
+**决定：** Linux MVP 使用 versioned local IPC；Rust 为 Protocol 真源并生成 TypeScript DTO。UI 初次读取 Snapshot，后续消费 cursor-based ProjectionDelta；断线支持 delta catch-up 或显式 resync。  
+**状态：** Accepted
+
+## D-661 — High-frequency Telemetry Is Coalesced Before the WebView
+
+**决定：** token stream、heartbeat、progress tick、raw logs 不逐条穿透至 React；Daemon/Bridge 必须 batching/coalescing/backpressure，UI 消费 bounded product projection。  
+**状态：** Accepted
+
+## D-662 — Tauri Host Has No Canonical Store or Runtime Orchestration
+
+**决定：** Tauri 只承担窗口、Tray、通知、原生文件对话框、Deep Link、daemon 生命周期发现与 IPC Bridge；不得打开 Canonical DB 或运行 Mission Scheduler/Runtime Router。  
+**状态：** Accepted
+
+## D-663 — Frontend Durable State Is a Projection, Not an Independent Truth
+
+**决定：** React 中 Mission/Task/Agent/Runtime/Attention 等状态来自 workbenchd；本地 store 只负责 pane/theme/selection/draft 等 UI state。危险 mutation 不以前端 optimistic state 作为成功事实。  
+**状态：** Accepted
+
+## D-664 — SQLite Uses an Explicit Single-writer Transaction Executor
+
+**决定：** 在 workbenchd 单写者基础上，MVP 优先建立 serialized write transaction executor + bounded read pool；实现建议优先显式 SQL/rusqlite，但库选择可由 benchmark 调整，不得改变事务一致性边界。  
+**状态：** Accepted
+
+## D-665 — Object Identity, Revision and Event Sequence Are Separate
+
+**决定：** 产品对象使用 opaque stable ID，revision 用于 optimistic concurrency，本地 event_seq 用于 ordering/projection recovery；不得把 DB row id 同时承担三种语义。  
+**状态：** Accepted
+
+## D-666 — Critical State Machines Prefer Pure Transition Logic
+
+**决定：** Mission/Task/Transfer/RuntimeProcess/Incident 等核心状态迁移应尽量由可单测 transition function 决定，IO/side effect 在 Application 层执行，避免异步 handler 中散落状态赋值。  
+**状态：** Accepted
+
+## D-667 — Agent Turn Lifecycle Is Above RuntimeAdapter
+
+**决定：** beforeTurnMemory → Context/Materialization → Runtime → afterTurnMemory 属于 Workbench Application/Context 层；Runtime Adapter 不拥有 Agent identity、MemorySpace、Conversation 或 Project Shared Context。  
+**状态：** Accepted
+
+## D-668 — Workspace Side Effects Use Shared Controlled Process Infrastructure
+
+**决定：** Git/parser/CLI/preview 等外部进程通过统一受控 ProcessSpec/Supervisor 获得 cancellation、stdout bound、resource budget、correlation 与 secret-redaction；禁止各模块随意创建不可追踪 child process。  
+**状态：** Accepted
+
+## D-669 — AI Diagnostics Uses Diagnostic APIs, Not Unrestricted Log Filesystem Access
+
+**决定：** AI 调查通过已脱敏的 Incident/Diagnostic/Execution Evidence Query Tool 获取证据，不给 Agent 一个可绕过隐私边界的全局日志目录读取能力。  
+**状态：** Accepted
+
+## D-670 — Zero-token Fake Runtime Is a First-class Test Dependency
+
+**决定：** Linux MVP 必须内建 FakeRuntime/FakeProvider/FaultInjector 等测试实现，使 Scheduler、Approval、429/502、Crash、Fencing、Recovery、Mission 完成可在 CI 0 Token 运行；真实云 Runtime 仅用于 Contract/Canary/有限 E2E。  
+**状态：** Accepted
+
+## D-671 — Third-party Dynamic Plugin Breadth Does Not Shape MVP Core Dependencies
+
+**决定：** Plugin/Skill 扩展接口保留，但 Scheduler/Store/Runtime/Workspace 不依赖公开第三方动态 Plugin Host 才能启动；MVP 以 built-in/bundled/approved capabilities 为主，Marketplace 与广泛动态 package 后移。  
+**状态：** Accepted
+
+## D-672 — Two Primary Product Binaries for Linux MVP
+
+**决定：** Linux MVP 主产品二进制保持 `team-workbench` + `workbenchd` 两个核心；DeepSeek/Codex 继续作为独立 Managed/External Runtime。内部 helper 仅在 parser/preview 隔离确有需要时增加。  
+**状态：** Accepted
+
+---
+
+# 694. Architecture Freeze Candidate — 从“继续设计”切换到“开始实现”
+
+v0.50 开始，Linux MVP 进入 **Architecture Freeze Candidate**。其含义不是架构永远不能改，而是：
+
+```text
+默认行为：不再新增 P0 大模块
+
+新想法：
+先进入 Post-MVP / ADR Candidate
+
+只有满足以下任一条件才允许重新打开 P0：
+- 不做会破坏数据安全或 Secret 边界
+- 不做会破坏 DeepSeek/Codex 核心执行正确性
+- 不做会破坏 Mission/Workspace Recovery
+- 不做会造成不可接受的 Token / Provider / Disk / Process 风暴
+- 不做会让 Linux 首次安装或基本使用链断裂
+```
+
+因此，从这一版本之后，设计工作的主要任务从“增加能力”切换为：实现、验证、发现架构假设错误、通过 ADR 做受控修正。
+
+主文档继续保留完整历史；开发阶段新增的精简规范 `LINUX_MVP_ENGINEERING_BASELINE.md` 作为工程团队优先阅读的 **Normative Baseline**。若历史章节与 Baseline 冲突，以 Baseline + 后续 Accepted ADR 为准。
+
+---
+
+# 695. 第一条 Walking Skeleton：先证明“真源链”而不是先做漂亮 Agent UI
+
+第一条可运行链必须尽量小，但必须跨过真正的系统边界：
+
+```text
+React Shell
+   ↓
+Tauri IPC Bridge
+   ↓
+workbenchd
+   ↓
+Command Handler
+   ↓
+SQLite Transaction
+   ↓
+Semantic Event + Receipt
+   ↓
+FakeRuntimeAdapter
+   ↓
+Agent Turn Result
+   ↓
+ProjectionDelta
+   ↓
+React 更新
+```
+
+第一条 Walking Skeleton 的用户行为只需要：
+
+```text
+打开 Workbench
+↓
+进入 My Agent
+↓
+输入一句话
+↓
+Fake Runtime 返回结构化响应
+↓
+关闭 UI
+↓
+重新打开
+↓
+Conversation / Agent 状态仍然来自 daemon + DB
+```
+
+这条链必须先跑通，因为它同时验证：
+
+```text
+UI 不是 Truth
+Tauri 不是 Application Host
+workbenchd 是唯一业务宿主
+SQLite transaction 是 Canonical mutation 边界
+Projection 能跨断线恢复
+Runtime 可以替换
+CI 不需要真实 Token
+```
+
+在这条链通过之前，不优先实现复杂 Mission Canvas、Memory Studio、Skill Studio 或高级视觉细节。
+
+---
+
+# 696. Vertical Slice Implementation Order
+
+实现顺序按风险和依赖推进，而不是按左侧菜单顺序开发页面。
+
+```text
+SLICE 0 — REPOSITORY / BUILD SKELETON
+Rust workspace
+Tauri shell
+React shell
+Protocol generation
+CI / formatting / lint / unit test
+
+        ↓
+
+SLICE 1 — DURABLE AGENT TURN, ZERO TOKEN
+workbenchd
+profile lock
+SQLite + migration 001
+Command / Receipt / Event
+Projection snapshot + delta
+FakeRuntime
+My Agent minimal Composer
+restart persistence
+
+        ↓
+
+SLICE 2 — FIRST REAL CORE RUNTIME
+Codex Adapter first for implementation sequencing
+Managed/External discovery
+Auth status projection
+local Contract Probe
+one real Agent turn
+usage receipt
+native approval projection
+
+        ↓
+
+SLICE 3 — SECOND CORE RUNTIME + ROUTER
+DeepSeek Harness Adapter
+same RuntimeAdapter contract
+Auto / manual DeepSeek / Codex
+capability fingerprint
+Last-Good / compatibility state
+
+        ↓
+
+SLICE 4 — WORKSPACE / GIT EFFECT LOOP
+Local Workspace binding
+ResourceRef
+Git status/diff
+Safety Point
+controlled process execution
+ChangeSet
+review evidence
+side-effect reconciliation
+
+        ↓
+
+SLICE 5 — PROJECT / ROOM / MISSION
+Project
+Room
+2–3 persistent Workbench Agents
+Task Graph
+Handoff
+Scheduler
+Harness-native worker accounting
+Review / Repair
+
+        ↓
+
+SLICE 6 — FAILURE IS A FIRST-CLASS PATH
+429 / 502
+WAITING_RATE_LIMIT
+Approval parking
+Runtime crash
+Run Lease / Epoch
+UNCERTAIN_EFFECT
+Boot Recovery Sweep
+Attention
+
+        ↓
+
+SLICE 7 — OPERABILITY
+Diagnostics
+AI Investigation on explicit request
+log retention
+Backup / Restore
+Runtime update / Last-Good
+first-run bootstrap polish
+
+        ↓
+
+MVP RELEASE HARDENING
+stress / soak / fault injection
+privacy / secret leak test
+Token regression baselines
+UI/visual polish
+```
+
+**Codex 在 Slice 2 先接只是工程顺序，不是产品优先级或“主 Runtime”。** 在 MVP Release Gate 前，DeepSeek/Codex 都必须通过相同的 Core Runtime Contract；Workbench Agent 的 Core Runtime 仍然只有这两类。
+
+---
+
+# 697. 第一条真实 Runtime 为什么先接 Codex，但不能污染架构
+
+实现阶段先接一个真实 Runtime，可以尽早暴露 IPC、streaming、approval、usage、process supervision 等真实问题。MVP 建议先接 Codex，原因仅是当前 Linux standalone / app-server / schema 探测路径更适合做第一个工程 Integration Spike。
+
+但必须满足以下限制：
+
+```text
+workbench-domain
+workbench-app
+workbench-execution
+workbench-store
+React
+```
+
+不得出现：
+
+```text
+Codex-specific enum
+Codex-specific JSON
+Codex-specific approval field
+Codex-specific session ID semantic
+```
+
+只有：
+
+```text
+workbench-runtime-codex
+```
+
+可以知道原生 Codex 细节。
+
+当 DeepSeek Adapter 加入时，如果必须修改 Scheduler/Domain 才能“容纳 DeepSeek”，首先应怀疑 RuntimeAdapter 抽象是否泄漏，而不是立即给核心层增加大量 Harness-specific 分支。
+
+---
+
+# 698. Linux MVP Engineering Baseline — Final Normative Precedence
+
+开发时若历史章节出现冲突，以下 Final Rule 优先：
+
+| 主题 | Linux MVP 最终规则 | 被覆盖的旧方向 |
+|---|---|---|
+| Core Agent Runtime | 仅 DeepSeek Harness / Codex Harness | Claude Code/OpenCode/OpenClaw 作为主 Agent Runtime |
+| Direct parallel subtask | 当前 Harness native worker/subagent 优先 | 为每个并行子任务创建长期 Workbench Agent |
+| External Worker | Linux MVP 不实现；未来仅 Room/Mission task-scoped | 进入 Main Agent runtime selector |
+| Permission | 复用各 Harness 原生 sandbox/approval/policy | Workbench 自建 Unified Permission Engine |
+| Memory | 每 Agent 独立 Private MemorySpace；共享事实进 Project Shared Context | Team Shared Memory / 跨 Agent 私有读取 |
+| Retrieval | FTS/BM25/metadata/symbol/relation baseline | 默认 Embedding/Vector/Reranker |
+| Multimodal ingestion | deterministic ingest + on-demand main-model understanding | 全 Workspace 自动 Vision/OCR/STT |
+| Background execution | workbenchd durable user service | Tauri 窗口承载 Mission 生命周期 |
+| Provider pressure | 429/5xx 先进入 capacity/retry state | 直接判 Task FAILED |
+| Waiting approval | Park，等待本身 0 Token | Agent 轮询用户或模型 heartbeat |
+| Android | Later，只保留接口边界 | Linux MVP 实现 Relay/Remote Approval |
+| Visual | 借鉴构图/信息语言，Theme 独立 | 锁死参考图具体黑底/荧光色 |
+| Storage | workbenchd 单写 Canonical SQLite + object sidecar | 前端/Adapter 直接写 DB、多库过早拆分 |
+| Diagnostics | deterministic detection + 按需 AI investigation | 常驻 AI 盯日志 |
+| Logs | TTL + quota + pinned evidence + roll-up | 永久保存全部 raw logs |
+| Backup | Canonical product data，不默认含 raw logs/Secret/Runtime session/Workspace bytes | “整个 data dir 打包” |
+| UI IA | Route 3 Hybrid Agent-centered Shell | 六大域完全平权的纯工具平台或所有功能都塞 Agent 页 |
+
+该表是 Linux MVP 的 **Normative Conflict Resolver**。历史段落仍保留设计演进价值，但实现不得引用已被本表覆盖的旧方向作为理由。
+
+---
+
+# 699. P0 Product Surface Freeze
+
+Linux MVP 的用户可见 P0 Surface 仍然只围绕 Route 3 Hybrid Shell：
+
+```text
+01 AGENT      → MY WORK / Personal Primary Agent
+02 PROJECTS   → Project Control Center
+03 ROOMS      → Collaboration / active Mission entry
+04 WORKSPACE  → Explorer-grade local workspace
+05 LIBRARY    → Agents / basic Skills / basic Plugins
+06 SYSTEM     → Runtime / Provider / Credential / Backup / Diagnostics
+```
+
+但“有入口”不等于第一版每个入口都达到最终深度。
+
+MVP Release 前必须完整的重点路径是：
+
+```text
+AGENT
+PROJECT
+ROOM / MISSION
+WORKSPACE
+SYSTEM Runtime/Diagnostics/Backup
+```
+
+`LIBRARY` 首版只需要支持 Agent Library、当前 Agent 的基础能力关系与必要设置；完整 Marketplace、复杂 Skill analytics、Archscribe 高级 Explain 等继续保持 Post-MVP。
+
+---
+
+# 700. MVP Definition of Done — 一条真实工作链必须从头到尾成立
+
+Linux MVP 不以“页面完成数量”作为 Done，而以一条真实工作链作为 Release Contract：
+
+```text
+Install Workbench
+↓
+workbenchd bootstrap succeeds
+↓
+at least one Core Runtime READY
+↓
+create/use Personal Primary Agent
+↓
+bind local Git workspace
+↓
+create Project + Room
+↓
+launch Mission with 2–3 Workbench Agents
+↓
+Scheduler assigns work
+↓
+DeepSeek/Codex execute through native permission systems
+↓
+workspace gets real ChangeSet + Safety Point
+↓
+provider receives injected 429/502 pressure
+↓
+no false semantic failure / no retry storm
+↓
+one branch waits for native approval
+↓
+waiting consumes 0 additional LLM Token
+↓
+independent branch continues
+↓
+Runtime process is killed intentionally
+↓
+workbenchd reconciles / resumes safely
+↓
+Review produces APPROVED or Repair Task
+↓
+Mission reaches verified completion
+↓
+Project Control shows actual changes / cost / attention
+↓
+AI Diagnostics can investigate a deliberately injected Incident on request
+↓
+close/reopen UI without losing truth
+↓
+restart machine / daemon recovery path succeeds
+↓
+Backup + staged Restore succeeds
+↓
+Secret leakage tests PASS
+↓
+log retention / disk budget tests PASS
+```
+
+只有这条链稳定通过，才允许把 Linux MVP 标记为 Release Candidate。
+
+---
+
+# 701. Architecture Change Control After Freeze
+
+Freeze 后如果实现暴露架构问题，允许修改，但必须走小型 ADR：
+
+```text
+ADR
+
+Problem
+Observed Evidence
+Affected Decision(s)
+Alternatives
+Chosen Change
+Migration / Compatibility Impact
+Security / Privacy Impact
+Token / Cost Impact
+Test Added
+Rollback Plan
+```
+
+以下变化属于 **Architecture Change**，不能以普通 refactor 名义悄悄进入：
+
+```text
+改变 Agent Runtime 边界
+改变 Private Memory 隔离
+改变 Harness 原生 Permission 复用原则
+改变 Canonical DB writer
+改变 side-effect replay 规则
+改变 Data Egress / Secret policy
+改变 Provider retry → Task failure 的语义
+改变 Linux MVP Scope Freeze
+```
+
+普通内部重构、库替换、UI 细节则不需要上升为架构 ADR，只要不改变这些语义边界。
+
+---
+
+# 702. 开工顺序：第一周不应该从完整视觉稿或全部页面开始
+
+推荐第一批工程任务直接围绕 Slice 0 / Slice 1：
+
+```text
+repo bootstrap
+→ Rust workspace / package workspace
+→ workbench-protocol
+→ workbench-domain 最小 Agent/Conversation/Command/Receipt
+→ workbench-store migration 001
+→ workbenchd single-instance + IPC handshake
+→ Projection snapshot/delta
+→ FakeRuntimeAdapter
+→ React Route-3 shell skeleton
+→ My Agent minimal Composer
+→ send → daemon → DB → fake runtime → projection → render
+→ kill/restart daemon test
+→ close/reopen desktop test
+```
+
+视觉方面这一阶段只实现已经冻结的结构语言：Global Rail / MY WORK / Primary Stage / Live Signal、排版层级与 Theme token 基础；不在 Walking Skeleton 阶段投入大量时间做最终动效、复杂切角或高级可视化。
+
+第一条链跑通之后再进行视觉系统深化，会比先做一套漂亮但没有 Durable Truth 的壳更加安全。
+
+---
+
+# 703. Architecture Freeze Exit Criteria
+
+当满足以下条件时，v0.50 从 Freeze Candidate 升级为 **Linux MVP Architecture Baseline 1.0**：
+
+```text
+1. Engineering Baseline 文档完成并被作为 implementation entry point
+2. Historical conflict resolver 完成
+3. Slice 0/1 没有发现需要推翻 Runtime/Store/IPC 核心边界的问题
+4. FakeRuntime end-to-end 可在 CI 0 Token 运行
+5. Command → Transaction → Event/Receipt → Projection 链被证明
+6. workbenchd restart 后 Durable state 正确
+7. Frontend 不拥有 Canonical product truth
+8. Codex Integration Spike 没有迫使核心层理解原生协议
+9. DeepSeek Adapter 可以在同一 Runtime contract 下接入
+10. 安全审查确认 Permission/Secret/Memory/Egress 边界没有被代码结构绕过
+```
+
+如果 Slice 0/1 就发现根本边界错误，应该在成本最低的时候通过 ADR 修正；不要为了“已经 Freeze”而坚持错误设计。
+
+---
+
+# 704. v0.50 Decision Log — Vertical Slice / Architecture Freeze
+
+## D-673 — Linux MVP Enters Architecture Freeze Candidate
+
+**决定：** v0.50 后默认停止新增 Linux MVP P0 大模块；新能力进入 Post-MVP/ADR Candidate，只有安全、核心执行、恢复、资源风暴或首次可用链被破坏时才允许重新打开 P0。  
+**状态：** Accepted
+
+## D-674 — Engineering Baseline Becomes Normative Implementation Entry Point
+
+**决定：** 主文档保留完整设计历史；另维护精简 `LINUX_MVP_ENGINEERING_BASELINE.md` 作为开发阶段优先规范。历史内容与 Baseline 冲突时，以 Baseline + 后续 Accepted ADR 为准。  
+**状态：** Accepted
+
+## D-675 — First Walking Skeleton Uses FakeRuntime and Proves the Durable Truth Chain
+
+**决定：** 第一条 E2E 优先证明 `React -> Tauri -> IPC -> workbenchd -> SQLite transaction -> Event/Receipt -> FakeRuntime -> Projection -> React`，并验证 UI/daemon 重启恢复；不先做复杂页面。  
+**状态：** Accepted
+
+## D-676 — Implementation Proceeds by Vertical Risk Slices, Not Navigation Pages
+
+**决定：** 实现按 Repository/Daemon/IPC/Fake Runtime → first real Runtime → second Runtime → Workspace/Git → Mission → Recovery → Operability 顺序推进，而非同时按 Agent/Project/Room/Workspace 菜单并行开发所有页面。  
+**状态：** Accepted
+
+## D-677 — Codex-first Integration Is Sequencing Only
+
+**决定：** Linux MVP 可先接 Codex 作为第一真实 Runtime Integration Spike，但这不形成产品主从、默认偏好或架构特权；DeepSeek/Codex 在最终 Runtime Contract 与 Release Gate 中地位相同。  
+**状态：** Accepted
+
+## D-678 — Historical Decisions Are Resolved by an Explicit Normative Precedence Table
+
+**决定：** 已被后续版本修正的旧方向继续保留为历史，但实现必须使用 v0.50 Conflict Resolver：原生 Harness 权限、DeepSeek/Codex-only Core Runtime、No-Embedding baseline、Linux-first、Route-3 Shell、workbenchd truth 等最终规则优先。  
+**状态：** Accepted
+
+## D-679 — Linux MVP Done Is an End-to-end Recovery-capable Work Contract
+
+**决定：** MVP Done 不以页面或 Feature 数量计算，而以安装→Agent→Project/Room/Mission→Workspace Change→Provider Pressure→Approval Park→Crash Recovery→Review→Completion→Diagnostics→Restart→Backup Restore 的端到端链通过为准。  
+**状态：** Accepted
+
+## D-680 — Architecture Changes After Freeze Require Evidence-bearing ADRs
+
+**决定：** Freeze 后对 Runtime、Memory、Permission、Canonical Store、Replay、Egress、Provider failure semantics、MVP scope 等核心边界的改变必须通过 ADR，记录证据、迁移、安全/成本影响、测试与回滚；普通实现重构不需要上升为 ADR。  
+**状态：** Accepted
+
+## D-681 — Slice 0/1 May Still Correct a Bad Frozen Assumption
+
+**决定：** Architecture Freeze 不是拒绝现实证据。Walking Skeleton 若证明边界错误，应立即通过 ADR 修正，优先在低成本阶段纠正，而不是为了保持文档稳定继续堆补丁。  
+**状态：** Accepted
+
+## D-682 — Final Visual Polish Follows the Durable Walking Skeleton
+
+**决定：** Route-3 Shell、参考图所代表的结构风格与 Style/Theme 分离原则从第一天存在，但复杂动效、高级切角/可视化的最终打磨在 Durable Turn/Projection/Recovery Skeleton 跑通后进行，避免形成“漂亮但没有真源”的前端壳。  
+**状态：** Accepted
